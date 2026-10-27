@@ -12,7 +12,9 @@ const GASTOS = [
 ];
 
 test('administración: presupuesto, resumen y copia al mes siguiente', () => {
-  assert.equal(presupuestoMensualUsd({ telefonia: 4, software: '6', vacio: '' }), 10);
+  assert.equal(presupuestoMensualUsd({ telefonia: 4, software: '6', vacio: '' }, '2027'), 10);
+  assert.equal(presupuestoMensualUsd({ telefonia: { 2027: 4, 2028: 7 }, software: 6 }, '2028'), 13);
+  assert.equal(presupuestoMensualUsd({ telefonia: { 2027: 4 } }, '2026'), 0);
   const r = resumenAdmin(GASTOS);
   assert.equal(r.total, 1_000);
   assert.equal(r.pendientesDePago, 1);
@@ -27,7 +29,7 @@ test('P&L: administración real reemplaza al presupuesto del mes', () => {
   const esc = completarEscenario({ factorPrecio: 1, estructuraTmUsd: 99 });
   const [ene, feb] = calcularPnl({
     periodos, facturaciones: {}, personal: [], cargas: {}, fx: () => 10, escenarios: { arranque: esc, esperado: esc },
-    administracion: { '2027-01': { total: 1_000 } }, administracionUsd: 5,
+    administracion: { '2027-01': { total: 1_000 } }, administracionUsd: () => 5,
   });
   assert.equal(ene.estructura, 1_000);
   assert.equal(ene.administracionReal, true);

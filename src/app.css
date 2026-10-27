@@ -302,3 +302,5 @@ td.con-origen input{ cursor:text; }
 .rubros{ margin-top:16px; max-width:640px; }
 .gastos{ margin-top:16px; }
 .gastos tr.reembolsable td:nth-child(2){ color:var(--tm-blue); font-weight:600; }
+.presupuesto-admin th button{ display:block; margin-left:auto; padding:0; white-space:nowrap; }
+.presupuesto-admin input.corto{ width:100px; }

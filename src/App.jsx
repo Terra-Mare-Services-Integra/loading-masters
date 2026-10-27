@@ -13,7 +13,7 @@ import { semestresContrato, cumplimiento, fraccionSemestre, bonoSemestre } from 
 import { completarEscenario } from './lib/resultado.js';
 import { ingresoArs, costoArs, upsellingPorMes } from './lib/upselling.js';
 import { RUBROS_VEHICULO, mesesAmortizacion, cuotaAmortizacionUsd, amortizacionMesUsd } from './lib/vehiculo.js';
-import { RUBROS_ADMIN, presupuestoMensualUsd, resumenAdmin, adminPorMes, copiarAlMes } from './lib/administracion.js';
+import { RUBROS_ADMIN, presupuestoMensualUsd, presupuestoRubroUsd, resumenAdmin, adminPorMes, copiarAlMes } from './lib/administracion.js';
 import { costoMensualUsd, cronogramaCuotas, primaAnualUsd } from './lib/seguros.js';
 import { periodosContrato, periodosSueldos, calcularPnl, costoCapitanesMes, participacionPorAnio, mesesEquivalentes } from './lib/pnl.js';
 
@@ -191,7 +191,8 @@ function useContrato() {
         const camioneta = { ...refsFijos.vehiculo, fechaCompra: refsFijos.vehiculo.fechaCompra || inicios?.operacionPlena || null };
         const amortizacionUsd = (mes) => amortizacionMesUsd(camioneta, finContrato, mes);
         // Los gastos del vehículo se presupuestan desde el mes de compra.
-        const vehiculoUsd = (mes) => (camioneta.fechaCompra && mes >= camioneta.fechaCompra.slice(0, 7) ? presupuestoMensualUsd(presupuestos.vehiculo) : 0);
+        const vehiculoUsd = (mes) => (camioneta.fechaCompra && mes >= camioneta.fechaCompra.slice(0, 7) ? presupuestoMensualUsd(presupuestos.vehiculo, mes.slice(0, 4)) : 0);
+        const administracionUsd = (mes) => (administracion ? presupuestoMensualUsd(presupuestos.administracion, mes.slice(0, 4)) : null);
         const filas = calcularPnl({
           periodos, facturaciones, personal, cargas, fx, sueldosReales, gastos: resumenGastosMes,
           escenarios: { arranque, esperado },
@@ -200,7 +201,7 @@ function useContrato() {
           inicioPleno: inicios?.operacionPlena ?? null,
           costoSegurosUsd: seguros?.polizas ? costoMensualUsd(seguros.polizas) : null,
           administracion: resumenFijos.administracion,
-          administracionUsd: administracion ? presupuestoMensualUsd(presupuestos.administracion) : null,
+          administracionUsd,
           vehiculo: resumenFijos.vehiculo,
           vehiculoUsd,
           amortizacionUsd,
@@ -212,7 +213,7 @@ function useContrato() {
             const meq = mesesEquivalentes(m);
             const fila = filas.find((f) => f.desde <= m.hasta && f.hasta >= m.desde);
             const amortizacion = area === 'vehiculo' ? amortizacionUsd(m.mes) * fx(m.mes) * meq : 0;
-            const mensualUsd = area === 'vehiculo' ? vehiculoUsd(m.mes) : presupuestoMensualUsd(presupuestos[area]);
+            const mensualUsd = area === 'vehiculo' ? vehiculoUsd(m.mes) : administracionUsd(m.mes) ?? 0;
             const presupuesto = area === 'vehiculo' && fila?.real ? 0 : mensualUsd * fx(m.mes) * meq;
             return {
               ...m, meq, fx: fx(m.mes), amortizacion, presupuesto,
@@ -2385,7 +2386,7 @@ function ModuloGastosFijos({ area }) {
       </section>
 
       {area === 'vehiculo' && <Camioneta datos={datos} fx={fx} onCambio={recargar} />}
-      <PresupuestoFijo area={area} referencia={datos.refsFijos[area]} fx={fx} onCambio={recargar} />
+      <PresupuestoFijo area={area} referencia={datos.refsFijos[area]} meses={meses} fx={fx} onCambio={recargar} />
 
       <div className="meses">
         {meses.map((m) => {
@@ -2462,16 +2463,26 @@ function Camioneta({ datos, fx, onCambio }) {
   );
 }
 
-// Presupuesto mensual en USD por rubro: es la proyección de los meses sin gastos cargados.
-function PresupuestoFijo({ area, referencia, fx, onCambio }) {
-  const [valores, setValores] = useState(() => ({ ...referencia.presupuestoUsd }));
+// Presupuesto mensual en USD por rubro, una columna por año: es la proyección de los meses sin gastos
+// cargados. Se guarda { rubro: { año: USD por mes } }.
+function PresupuestoFijo({ area, referencia, meses, fx, onCambio }) {
+  const anios = [...new Set(meses.map((m) => m.mes.slice(0, 4)))];
+  // Meses de contrato de cada año (2026 y 2029 son parciales).
+  const mesesDelAnio = (a) => meses.filter((m) => m.mes.startsWith(a)).reduce((t, m) => t + m.meq, 0);
+  const [valores, setValores] = useState(() => Object.fromEntries(AREAS[area].rubros.map((ru) => [ru.id,
+    Object.fromEntries(anios.map((a) => [a, presupuestoRubroUsd(referencia.presupuestoUsd?.[ru.id], a) || '']))])));
   const [aviso, setAviso] = useState('');
-  const total = presupuestoMensualUsd(valores);
+  const totalAnio = (a) => presupuestoMensualUsd(valores, a);
+  const set = (rubro, anio, v) => setValores({ ...valores, [rubro]: { ...valores[rubro], [anio]: v } });
+  // Copia los valores de un año al siguiente (los abonos suelen repetirse).
+  const copiarAnio = (desde, hasta) => setValores(Object.fromEntries(Object.entries(valores).map(([k, v]) => [k, { ...v, [hasta]: v[desde] }])));
 
   async function guardar() {
     setAviso('');
     try {
-      const limpio = Object.fromEntries(Object.entries(valores).map(([k, v]) => [k, Number(v) || 0]).filter(([, v]) => v > 0));
+      const limpio = Object.fromEntries(Object.entries(valores)
+        .map(([k, v]) => [k, Object.fromEntries(Object.entries(v).map(([a, x]) => [a, Number(x) || 0]).filter(([, x]) => x > 0))])
+        .filter(([, v]) => Object.keys(v).length));
       await db.guardarReferencia(area, { ...referencia, presupuestoUsd: limpio });
       setAviso('Guardado');
       onCambio();
@@ -2482,20 +2493,38 @@ function PresupuestoFijo({ area, referencia, fx, onCambio }) {
 
   return (
     <section className="tarjeta presupuesto-admin">
-      <div className="overline">Presupuesto mensual de gastos (proyección)</div>
+      <div className="overline">Presupuesto de gastos (proyección) · USD por mes</div>
       <div className="tabla-scroll">
         <table className="tabla-ajuste">
-          <thead><tr><th>Rubro</th><th>USD por mes</th></tr></thead>
+          <thead>
+            <tr>
+              <th>Rubro</th>
+              {anios.map((a, i) => (
+                <th key={a} className="n">
+                  {a}
+                  {i > 0 && <button type="button" className="terciario chico" title={`Copiar los valores de ${anios[i - 1]}`}
+                    onClick={() => copiarAnio(anios[i - 1], a)}>← copiar</button>}
+                </th>
+              ))}
+            </tr>
+          </thead>
           <tbody>
             {AREAS[area].rubros.map((ru) => (
               <tr key={ru.id}>
                 <td>{ru.nombre}</td>
-                <td><input type="number" min="0" step="any" className="mono" value={valores[ru.id] ?? ''}
-                  onChange={(e) => setValores({ ...valores, [ru.id]: e.target.value })} /></td>
+                {anios.map((a) => (
+                  <td key={a}><input type="number" min="0" step="any" className="mono corto" value={valores[ru.id][a]}
+                    onChange={(e) => set(ru.id, a, e.target.value)} /></td>
+                ))}
               </tr>
             ))}
           </tbody>
-          <tfoot><tr><td>Total</td><td className="n mono">USD {dec(total)} <span className="ayuda">≈ {pesos(total * fx)}</span></td></tr></tfoot>
+          <tfoot>
+            <tr><td>Total por mes</td>{anios.map((a) => <td key={a} className="n mono">USD {dec(totalAnio(a))}</td>)}</tr>
+            <tr><td>Total del año <span className="ayuda">(meses de contrato, ≈ $ al dólar de hoy)</span></td>{anios.map((a) => (
+              <td key={a} className="n mono">USD {dec(totalAnio(a) * mesesDelAnio(a), 0)}<div className="ayuda">{pesos(totalAnio(a) * mesesDelAnio(a) * fx)}</div></td>
+            ))}</tr>
+          </tfoot>
         </table>
       </div>
       <div className="acciones">
@@ -2604,7 +2633,7 @@ function GastosFijosMes({ area, mes, anterior, datos, onCambio }) {
                 <tr key={ru.id}>
                   <td>{ru.nombre}</td>
                   <td className="n mono">{pesos(r.porRubro[ru.id])}</td>
-                  <td className="n mono">{presupuesto[ru.id] ? pesos(presupuesto[ru.id] * mes.fx * mes.meq) : '—'}</td>
+                  <td className="n mono">{presupuestoRubroUsd(presupuesto[ru.id], mes.mes.slice(0, 4)) ? pesos(presupuestoRubroUsd(presupuesto[ru.id], mes.mes.slice(0, 4)) * mes.fx * mes.meq) : '—'}</td>
                 </tr>
               ))}
             </tbody>

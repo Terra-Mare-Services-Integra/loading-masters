@@ -17,8 +17,13 @@ export const RUBROS_ADMIN = [
 ];
 export const nombreRubroAdmin = (id) => RUBROS_ADMIN.find((r) => r.id === id)?.nombre ?? id;
 
-// Suma del presupuesto mensual (USD) de todos los rubros.
-export const presupuestoMensualUsd = (presupuesto = {}) => Object.values(presupuesto).reduce((s, x) => s + (Number(x) || 0), 0);
+// Presupuesto mensual (USD) de un rubro en un año: cada rubro guarda un valor por año
+// ({ '2027': 50 }); un número solo vale para todos los años.
+export const presupuestoRubroUsd = (valor, anio) => Number(valor !== null && typeof valor === 'object' ? valor[anio] : valor) || 0;
+
+// Suma del presupuesto mensual (USD) de todos los rubros en un año.
+export const presupuestoMensualUsd = (presupuesto = {}, anio) => Object.values(presupuesto)
+  .reduce((s, v) => s + presupuestoRubroUsd(v, anio), 0);
 
 // Totales de un mes, sin IVA y en pesos, con el detalle por rubro.
 export function resumenAdmin(gastos) {

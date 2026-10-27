@@ -127,13 +127,13 @@ const estado = (f) => (f?.cobradaEl ? 'cobrado' : f?.facturaEmitidaEl ? 'factura
  * @param {Record<string, Record<string, number>>} [p.sueldosReales]  por mes calendario: total real por persona
  * @param {Record<string, {compras: number, sergio: number, reembolsables: number}>} [p.gastos]  gastos de operación por mes calendario
  * @param {Record<string, {total: number}>} [p.administracion]  gastos de administración por mes calendario
- * @param {number|null} [p.administracionUsd]  presupuesto mensual de administración (si no, el del escenario)
+ * @param {(mes: string) => number|null} [p.administracionUsd]  presupuesto de administración de cada mes (null: el del escenario)
  * @param {Record<string, {total: number}>} [p.vehiculo]  gastos del vehículo por mes calendario
  * @param {(mes: string) => number} [p.vehiculoUsd]  presupuesto de gastos del vehículo de cada mes
  * @param {(mes: string) => number} [p.amortizacionUsd]  amortización de la camioneta de cada mes
  * @param {Record<string, {ingreso: number, costo: number}>} [p.upselling]  up selling por mes calendario
  */
-export function calcularPnl({ periodos, facturaciones, personal, cargas, escenarios, ajustes = [], fx, inicioSeguros = null, inicioPleno = null, costoSegurosUsd = null, sueldosReales = {}, gastos = {}, administracion = {}, administracionUsd = null, vehiculo = {}, vehiculoUsd = () => 0, amortizacionUsd = () => 0, upselling = {} }) {
+export function calcularPnl({ periodos, facturaciones, personal, cargas, escenarios, ajustes = [], fx, inicioSeguros = null, inicioPleno = null, costoSegurosUsd = null, sueldosReales = {}, gastos = {}, administracion = {}, administracionUsd = () => null, vehiculo = {}, vehiculoUsd = () => 0, amortizacionUsd = () => 0, upselling = {} }) {
   // El factor de la proyección es el del último día de la última facturación cargada (p. ej. 0,75).
   const cargadas = periodos.map((p) => facturaciones[p.mes]).filter(Boolean);
   const ultima = cargadas.at(-1);
@@ -207,7 +207,7 @@ export function calcularPnl({ periodos, facturaciones, personal, cargas, escenar
       operacionReal ||= Boolean(g?.compras > 0 || g?.sergio > 0);
       // Administración: lo cargado del mes o el presupuesto mensual.
       const a = administracion[mes];
-      estructura += a?.total > 0 ? a.total : (administracionUsd ?? esc.estructuraTmUsd) * fx(mes) * m;
+      estructura += a?.total > 0 ? a.total : (administracionUsd(mes) ?? esc.estructuraTmUsd) * fx(mes) * m;
       administracionReal ||= a?.total > 0;
       // Vehículo: amortización de la compra más los gastos cargados (o el presupuesto si el mes no
       // está facturado).
