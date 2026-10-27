@@ -121,8 +121,9 @@ const estado = (f) => (f?.cobradaEl ? 'cobrado' : f?.facturaEmitidaEl ? 'factura
  * @param {(mes: string) => number} p.fx   tipo de cambio ARS/USD de cada mes
  * @param {string|null} p.inicioSeguros    desde cuándo se facturan y pagan las pólizas (null = todavía no)
  * @param {Record<string, Record<string, number>>} [p.sueldosReales]  por mes calendario: total real por persona
+ * @param {Record<string, {compras: number, sergio: number, reembolsables: number}>} [p.gastos]  gastos de operación por mes calendario
  */
-export function calcularPnl({ periodos, facturaciones, personal, cargas, escenarios, ajustes = [], fx, inicioSeguros = null, sueldosReales = {} }) {
+export function calcularPnl({ periodos, facturaciones, personal, cargas, escenarios, ajustes = [], fx, inicioSeguros = null, sueldosReales = {}, gastos = {} }) {
   // El factor de la proyección es el del último día de la última facturación cargada (p. ej. 0,75).
   const cargadas = periodos.map((p) => facturaciones[p.mes]).filter(Boolean);
   const ultima = cargadas.at(-1);
@@ -163,12 +164,28 @@ export function calcularPnl({ periodos, facturaciones, personal, cargas, escenar
       capitanes += c.total;
       sueldosReales_ ||= c.conReales;
     }
-    const operacion = usd(esc.operacionUsd);
     const polizas = conSeguros ? usd(esc.costoSegurosUsd) : 0;
     const estructura = usd(esc.estructuraTmUsd);
-    const sergioFijo = usd(esc.sgFijoUsd * factor);
+    // Operación, Sergio y reembolsables por mes calendario: lo cargado en Operación reemplaza a lo
+    // proyectado de ese mes (las compras y los honorarios de Sergio por separado).
+    let operacion = 0;
+    let sergioFijo = 0;
+    let reembolsables = 0;
+    let operacionReal = false;
+    for (let mes = periodo.desde.slice(0, 7); mes <= periodo.hasta.slice(0, 7); mes = mesSiguiente(mes)) {
+      const tramo = {
+        desde: mes === periodo.desde.slice(0, 7) ? periodo.desde : `${mes}-01`,
+        hasta: mes === periodo.hasta.slice(0, 7) ? periodo.hasta : finDeMes(mes),
+      };
+      const m = mesesEquivalentes(tramo);
+      const g = gastos[mes];
+      operacion += g?.compras > 0 ? g.compras : esc.operacionUsd * fx(mes) * m;
+      sergioFijo += g?.sergio > 0 ? g.sergio : esc.sgFijoUsd * factor * fx(mes) * m;
+      reembolsables += g?.reembolsables ?? 0;
+      operacionReal ||= Boolean(g?.compras > 0 || g?.sergio > 0);
+    }
     const impuestos = ingreso * (esc.pctImprevistos + esc.pctCredito + esc.pctIibb);
-    const costosTotal = capitanes + operacion + polizas + estructura + sergioFijo + impuestos;
+    const costosTotal = capitanes + operacion + polizas + estructura + sergioFijo + reembolsables + impuestos;
     const bruto = ingreso - costosTotal;
     // Participación de Sergio sobre el resultado del servicio (sin la parte de seguros).
     const brutoSeguros = ingresoSeguros - polizas - ingresoSeguros * (esc.pctImprevistos + esc.pctCredito + esc.pctIibb);
@@ -182,7 +199,7 @@ export function calcularPnl({ periodos, facturaciones, personal, cargas, escenar
       factor,
       fx: tc,
       ingresoCoc, ingresoSeguros, ingreso,
-      capitanes, sueldosReales: sueldosReales_, operacion, polizas, estructura, sergioFijo, impuestos,
+      capitanes, sueldosReales: sueldosReales_, operacion, operacionReal, reembolsables, polizas, estructura, sergioFijo, impuestos,
       // Sergio factura como proveedor: su fijo va dentro de Operación.
       operacionTotal: operacion + sergioFijo,
       bruto,
@@ -194,7 +211,7 @@ export function calcularPnl({ periodos, facturaciones, personal, cargas, escenar
 
 // Sumas de una lista de filas del P&L.
 export function totalesPnl(filas) {
-  const campos = ['ingresoCoc', 'ingresoSeguros', 'ingreso', 'capitanes', 'operacion', 'operacionTotal', 'polizas', 'estructura', 'sergioFijo', 'impuestos', 'bruto', 'participacion', 'generacion'];
+  const campos = ['ingresoCoc', 'ingresoSeguros', 'ingreso', 'capitanes', 'operacion', 'operacionTotal', 'reembolsables', 'polizas', 'estructura', 'sergioFijo', 'impuestos', 'bruto', 'participacion', 'generacion'];
   return Object.fromEntries(campos.map((k) => [k, filas.reduce((s, f) => s + f[k], 0)]));
 }
 

@@ -8,9 +8,10 @@ import { supabase, DOMINIOS } from './lib/supabase.js';
 import { armarProforma, comprimirTramos, expandirTramos } from './proforma/armar.js';
 import { renderProforma } from './proforma/plantilla.js';
 import * as db from './datos.js';
+import { RUBROS, resumenGastos, gastosPorMes, montoArs, etiquetaGasto } from './lib/operacion.js';
 import { semestresContrato, cumplimiento, fraccionSemestre, bonoSemestre } from './lib/desempeno.js';
 import { completarEscenario } from './lib/resultado.js';
-import { periodosContrato, periodosSueldos, calcularPnl, costoCapitanesMes, participacionPorAnio } from './lib/pnl.js';
+import { periodosContrato, periodosSueldos, calcularPnl, costoCapitanesMes, participacionPorAnio, mesesEquivalentes } from './lib/pnl.js';
 
 const MENSUALES = CONTRATO_VMOS.items.filter((i) => i.tipo === 'mensual');
 const DOW = ['D', 'L', 'M', 'M', 'J', 'V', 'S'];
@@ -143,6 +144,7 @@ function Certificacion() {
       {vista === 'resultado' && <Resultado />}
       {vista === 'sueldos' && <Sueldos />}
       {vista === 'desempeno' && <Desempeno />}
+      {vista === 'operacion' && <Operacion />}
     </>
   );
 }
@@ -157,9 +159,9 @@ function useContrato() {
     Promise.all([
       db.leerEscenarios(), db.listarFacturacionesPorMes(), db.leerPersonal(), db.leerReferencia('cargas_sociales'),
       db.leerReferencia('inicios'), db.leerAjustes(), db.leerDolarPorMes(CONTRATO_VMOS.inicioServicio.slice(0, 7)),
-      db.leerSueldosMes(),
+      db.leerSueldosMes(), db.leerGastos(),
     ])
-      .then(([escenarios, facturaciones, personal, cargas, inicios, ajustes, dolar, sueldos]) => {
+      .then(([escenarios, facturaciones, personal, cargas, inicios, ajustes, dolar, sueldos, gastos]) => {
         const esperado = escenarios.esperado && completarEscenario(escenarios.esperado.supuestos);
         const arranque = escenarios.arranque && completarEscenario(escenarios.arranque.supuestos);
         if (!esperado || !arranque || !cargas) throw new Error('Faltan los supuestos o las cargas sociales en la base de datos');
@@ -170,13 +172,28 @@ function useContrato() {
         const mesesSueldos = periodosSueldos(esperado.mesesContrato).map((m) => ({
           ...m, reales: sueldos[m.mes] ?? {}, costo: costoCapitanesMes(m, personal, cargas, fx(m.mes), sueldosReales[m.mes]),
         }));
+        const resumenGastosMes = gastosPorMes(gastos);
         const filas = calcularPnl({
-          periodos, facturaciones, personal, cargas, fx, sueldosReales,
+          periodos, facturaciones, personal, cargas, fx, sueldosReales, gastos: resumenGastosMes,
           escenarios: { arranque, esperado },
           ajustes: ajustes.filter((a) => a.estado === 'aprobado'),
           inicioSeguros: inicios?.seguros ?? null,
         });
-        setDatos({ periodos, facturaciones, personal, filas, mesesSueldos, inicios: inicios ?? {}, arranque });
+        // Operación por mes calendario: gastos cargados y la proyección (con el factor del período).
+        const mesesOperacion = periodosSueldos(esperado.mesesContrato).map((m) => {
+          const fila = filas.find((f) => f.desde <= m.hasta && f.hasta >= m.desde);
+          const esc = fila && fila.factor < 1 ? arranque : esperado;
+          const factor = fila?.factor ?? arranque.factorPrecio;
+          const meq = mesesEquivalentes(m);
+          return {
+            ...m,
+            gastos: gastos.filter((g) => g.mes === m.mes),
+            resumen: resumenGastosMes[m.mes],
+            sgFijoUsd: esc.sgFijoUsd * factor * meq,
+            proyectado: { operacion: esc.operacionUsd * fx(m.mes) * meq, sergio: esc.sgFijoUsd * factor * fx(m.mes) * meq },
+          };
+        });
+        setDatos({ periodos, facturaciones, personal, filas, mesesSueldos, mesesOperacion, dolarUltimo: dolar.ultimo, inicios: inicios ?? {}, arranque });
       })
       .catch((e) => setError(e.message));
   }, [version]);
@@ -281,6 +298,7 @@ function Facturacion({ id, onCambioResumen }) {
   const [feriados, setFeriados] = useState([]);
   const [proformas, setProformas] = useState([]);
   const [ajustes, setAjustes] = useState([]);
+  const [avisoReembolsables, setAvisoReembolsables] = useState('');
   // estado del guardado: cargando | guardado | pendiente | guardando | error
   const [estado, setEstado] = useState({ tipo: 'cargando' });
   const cambiosSinGuardar = useRef(false);
@@ -352,6 +370,21 @@ function Facturacion({ id, onCambioResumen }) {
       setFeriados(await db.leerFeriados());
     } catch (e) {
       setEstado({ tipo: 'error', texto: e.message });
+    }
+  }
+
+  // Suma los reembolsables de Operación de los meses de esta facturación que no se facturaron en otra,
+  // los pone en el ítem 1d y los marca como facturados en este mes.
+  async function traerReembolsables() {
+    try {
+      const meses = new Set(rangoDias(carga.desde, carga.hasta).map((d) => d.slice(0, 7)));
+      const gastos = (await db.leerGastos()).filter((g) => g.reembolsable && meses.has(g.mes) && (!g.facturado_en || g.facturado_en === carga.mes));
+      const total = Math.round(gastos.reduce((t, g) => t + montoArs(g), 0) * 100) / 100;
+      set({ reembolsables: { '1d': total } });
+      await db.marcarReembolsablesFacturados(gastos.map((g) => g.id), carga.mes);
+      setAvisoReembolsables(`${gastos.length} gasto${gastos.length === 1 ? '' : 's'} reembolsable${gastos.length === 1 ? '' : 's'}: ${pesos(total)} sin fee`);
+    } catch (e) {
+      setAvisoReembolsables(`Error: ${e.message}`);
     }
   }
 
@@ -434,6 +467,8 @@ function Facturacion({ id, onCambioResumen }) {
                 <input type="number" min="0" step="0.01" value={carga.reembolsables['1d'] || ''}
                   onChange={(e) => set({ reembolsables: { '1d': Number(e.target.value) || 0 } })} />
               </label>
+              <button type="button" className="secundario chico" onClick={traerReembolsables}>Traer reembolsables de Operación</button>
+              {avisoReembolsables && <span className="ayuda">{avisoReembolsables}</span>}
               <Feriados feriados={feriados} periodo={periodo} onCambiar={cambiarFeriado} />
               <label>Observaciones (una por línea, salen en la proforma)
                 <textarea rows={3} value={carga.observaciones} onChange={(e) => set({ observaciones: e.target.value })} />
@@ -1228,13 +1263,13 @@ const MODULOS = [
   { id: 'resultado', nombre: 'Resultado', desc: 'P&L mes a mes: real y proyectado' },
   { id: 'sueldos', nombre: 'Sueldos', desc: 'Capitanes en relación de dependencia, mes a mes' },
   { id: 'desempeno', nombre: 'Desempeño', desc: 'Evaluación semestral 360° y bono de los capitanes' },
-  { id: 'operacion', nombre: 'Operación', desc: 'Sergio (superintendente, factura), vuelos, remises, hoteles, viáticos, EPP' },
+  { id: 'operacion', nombre: 'Operación', desc: 'Compras y reembolsables: transporte, combustible, hospedaje, EPP, Sergio' },
   { id: 'vehiculo', nombre: 'Vehículo', desc: 'Camioneta, pólizas, services' },
   { id: 'vivienda', nombre: 'Vivienda', desc: 'Alquiler del departamento' },
   { id: 'administracion', nombre: 'Administración', desc: 'Estructura TM: Xubio, Office, celulares' },
   { id: 'seguros', nombre: 'Seguros', desc: 'RC del contrato y pólizas 1a–1c' },
 ];
-const ACTIVOS = ['facturaciones', 'formula', 'resultado', 'sueldos', 'desempeno'];
+const ACTIVOS = ['facturaciones', 'formula', 'resultado', 'sueldos', 'desempeno', 'operacion'];
 
 function Inicio({ onAbrir }) {
   return (
@@ -1270,6 +1305,7 @@ const COLUMNAS_PNL = [
   ['ingreso', 'Ingresos'],
   ['capitanes', 'Capitanes'],
   ['operacionTotal', 'Operación (incl. Sergio)'],
+  ['reembolsables', 'Reembolsables'],
   ['impuestos', 'Imprev. e impuestos'],
   ['bruto', 'Resultado bruto'],
   ['participacion', 'Particip. Sergio (provisión)'],
@@ -1850,5 +1886,241 @@ function EvaluacionPersona({ persona, semestre, datos, actual, onCambio }) {
       </div>
       {error && <p className="aviso error">{error}</p>}
     </section>
+  );
+}
+
+// ─── Operación: gastos por mes (compras y reembolsables) ─────────────────────
+// Un mes por cajita desde octubre 2026. Cada gasto tiene rubro y tipo (Compra o Reembolsable). Lo
+// cargado reemplaza a la proyección del mes en el P&L; los reembolsables se pasan a la facturación (1d).
+
+const ESTADO_GASTOS = {
+  pagado: { color: 'verde', texto: 'Gastos cargados y pagados' },
+  pendiente: { color: 'amarilla', texto: 'Gastos con pagos pendientes' },
+  proyeccion: { color: 'gris', texto: 'Proyección' },
+};
+const estadoGastos = (r) => (!r?.cantidad ? 'proyeccion' : r.pendientesDePago ? 'pendiente' : 'pagado');
+
+function Operacion() {
+  const { datos, error, recargar } = useContrato();
+  const [abierto, setAbierto] = useState(null);
+  const hoy = hoyIso();
+  if (!datos) return <main>{error ? <p className="aviso error">Error: {error}</p> : 'Cargando…'}</main>;
+
+  if (abierto) {
+    const mes = datos.mesesOperacion.find((m) => m.mes === abierto);
+    return (
+      <main>
+        <button type="button" className="terciario volver-meses" onClick={() => { setAbierto(null); recargar(); }}>← Volver a los meses</button>
+        <GastosMes mes={mes} datos={datos} onCambio={recargar} />
+      </main>
+    );
+  }
+
+  return (
+    <main>
+      <section className="encabezado">
+        <div>
+          <h1>Operación.</h1>
+          <div className="filete" />
+          <p className="aviso">
+            Gastos del servicio, un mes por cajita. Cada gasto es una Compra (costo de Terra Mare) o un Reembolsable (se le
+            factura a VMOS con el 10 % del ítem 1d). Los honorarios de Sergio van como rubro propio.
+          </p>
+        </div>
+        <div className="leyenda">
+          {Object.values(ESTADO_GASTOS).map((e) => <span key={e.color}><span className={`bolita ${e.color}`} /> {e.texto}</span>)}
+        </div>
+      </section>
+      <div className="meses">
+        {datos.mesesOperacion.map((m) => {
+          const disponible = m.desde <= hoy;
+          const e = ESTADO_GASTOS[estadoGastos(m.resumen)];
+          const cargado = m.resumen?.cantidad > 0;
+          return (
+            <button key={m.mes} type="button" className={`mes-card ${cargado ? 'cargada' : ''}`} disabled={!disponible}
+              title={disponible ? '' : `Se habilita el ${fecha(m.desde)}`} onClick={() => setAbierto(m.mes)}>
+              <span className="mes-fila"><span className="mes-n mono">{String(m.n).padStart(2, '0')}</span><span className={`bolita ${e.color}`} title={e.texto} /></span>
+              <span className="mes-nombre">{m.nombre}</span>
+              <span className="mes-fechas mono">{fecha(m.desde)} – {fecha(m.hasta)}</span>
+              <span className={`mes-monto mono ${cargado ? '' : 'proyectado'}`}>
+                {millones(cargado ? m.resumen.total : m.proyectado.operacion + m.proyectado.sergio)}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </main>
+  );
+}
+
+const gastoVacio = (mes, fechaDefecto) => ({
+  mes: mes.mes, fecha: fechaDefecto, rubro: 'transporte_aereo', reembolsable: false, descripcion: '', proveedor: '',
+  factura_numero: '', persona_id: null, moneda: 'ARS', monto: '', iva_pct: 0.21, tipo_cambio: null, pagado_el: null, pagado_por: '',
+});
+
+function GastosMes({ mes, datos, onCambio }) {
+  const [gastos, setGastos] = useState(mes.gastos);
+  const hoy = hoyIso();
+  const fechaDefecto = hoy >= mes.desde && hoy <= mes.hasta ? hoy : mes.desde;
+  const [nuevo, setNuevo] = useState(() => gastoVacio(mes, fechaDefecto));
+  const [error, setError] = useState('');
+  const r = resumenGastos(gastos);
+  const tc = datos.dolarUltimo;
+
+  async function guardar() {
+    setError('');
+    const monto = Number(nuevo.monto);
+    if (!(monto > 0)) return setError('Cargá un monto mayor a cero.');
+    if (nuevo.moneda === 'USD' && !(Number(nuevo.tipo_cambio) > 0)) return setError('Para un gasto en USD cargá el tipo de cambio.');
+    if (!nuevo.fecha) return setError('Cargá la fecha del gasto.');
+    try {
+      const g = await db.guardarGasto({
+        ...nuevo, monto, iva_pct: Number(nuevo.iva_pct) || 0,
+        tipo_cambio: nuevo.moneda === 'USD' ? Number(nuevo.tipo_cambio) : null, pagado_el: nuevo.pagado_el || null,
+      });
+      setGastos((gs) => [...gs, { ...g, monto: Number(g.monto), iva_pct: Number(g.iva_pct), tipo_cambio: g.tipo_cambio && Number(g.tipo_cambio) }]);
+      setNuevo({ ...gastoVacio(mes, nuevo.fecha), rubro: nuevo.rubro, reembolsable: nuevo.reembolsable });
+      onCambio();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  async function actualizar(g, cambios) {
+    try {
+      const f = await db.guardarGasto({ ...g, ...cambios });
+      setGastos((gs) => gs.map((x) => (x.id === g.id ? { ...x, ...f, monto: Number(f.monto), iva_pct: Number(f.iva_pct) } : x)));
+      onCambio();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  async function borrar(g) {
+    if (g.facturado_en) return setError('Ese reembolsable ya está incluido en una facturación: no se puede borrar.');
+    if (!confirm(`¿Borrar "${etiquetaGasto(g)} · ${g.descripcion || g.proveedor}"?`)) return;
+    try {
+      await db.borrarGasto(g.id);
+      setGastos((gs) => gs.filter((x) => x.id !== g.id));
+      onCambio();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  function honorarioSergio() {
+    setNuevo({
+      ...gastoVacio(mes, fechaDefecto), rubro: 'superintendente', reembolsable: false, moneda: 'USD',
+      monto: Math.round(mes.sgFijoUsd * 100) / 100, tipo_cambio: tc, iva_pct: 0, proveedor: 'Superintendente técnico',
+      descripcion: `Honorarios ${mes.nombre}`,
+    });
+  }
+
+  const set = (c) => setNuevo((x) => ({ ...x, ...c }));
+  const rubrosConGastos = RUBROS.filter((ru) => r.porRubro[ru.id]);
+
+  return (
+    <>
+      <section className="encabezado">
+        <div>
+          <h1 className="capitalizar">{mes.nombre}.</h1>
+          <div className="periodo mono">{fecha(mes.desde)} – {fecha(mes.hasta)}</div>
+          <div className="filete" />
+        </div>
+        <div className="resumen-eval">
+          <div><span className="etiqueta">Compras</span> <span className="mono fuerte">{pesos(r.compras)}</span> <span className="ayuda">proy. {pesos(mes.proyectado.operacion)}</span></div>
+          <div><span className="etiqueta">Sergio</span> <span className="mono fuerte">{pesos(r.sergio)}</span> <span className="ayuda">proy. {pesos(mes.proyectado.sergio)}</span></div>
+          <div><span className="etiqueta">Reembolsables</span> <span className="mono fuerte">{pesos(r.reembolsables)}</span> <span className="ayuda">a facturar {pesos(r.reembolsables * 1.1)} (con fee)</span></div>
+        </div>
+      </section>
+      <p className="aviso">Montos sin IVA. Si el mes tiene compras cargadas, reemplazan a la operación proyectada en el P&L; lo mismo con los honorarios de Sergio.</p>
+
+      {rubrosConGastos.length > 0 && (
+        <div className="tabla-scroll">
+          <table className="tabla-ajuste rubros">
+            <thead><tr><th>Rubro</th><th className="n">Compra</th><th className="n">Reembolsable</th></tr></thead>
+            <tbody>
+              {rubrosConGastos.map((ru) => (
+                <tr key={ru.id}>
+                  <td>{ru.nombre}</td>
+                  <td className="n mono">{r.porRubro[ru.id].compra ? pesos(r.porRubro[ru.id].compra) : '—'}</td>
+                  <td className="n mono">{r.porRubro[ru.id].reembolsable ? pesos(r.porRubro[ru.id].reembolsable) : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <section className="tarjeta nuevo-gasto">
+        <div className="ventana-cabeza">
+          <div className="overline">Nuevo gasto</div>
+          <button type="button" className="terciario chico" onClick={honorarioSergio}>Cargar honorario de Sergio</button>
+        </div>
+        <div className="campos">
+          <div className="segmentado">
+            <button type="button" className={nuevo.reembolsable ? '' : 'activo'} onClick={() => set({ reembolsable: false })}>Compra</button>
+            <button type="button" className={nuevo.reembolsable ? 'activo' : ''} onClick={() => set({ reembolsable: true })}>Reembolsable</button>
+          </div>
+          <label>Rubro
+            <select value={nuevo.rubro} onChange={(e) => set({ rubro: e.target.value })}>
+              {RUBROS.map((ru) => <option key={ru.id} value={ru.id}>{ru.nombre}</option>)}
+            </select>
+          </label>
+          <label>Fecha<input type="date" value={nuevo.fecha} onChange={(e) => set({ fecha: e.target.value })} /></label>
+          <label className="ancho">Descripción<input value={nuevo.descripcion} onChange={(e) => set({ descripcion: e.target.value })} /></label>
+        </div>
+        <div className="campos">
+          <label>Proveedor<input value={nuevo.proveedor} onChange={(e) => set({ proveedor: e.target.value })} /></label>
+          <label>Factura N°<input value={nuevo.factura_numero} onChange={(e) => set({ factura_numero: e.target.value })} /></label>
+          <label>Capitán (opcional)
+            <select value={nuevo.persona_id ?? ''} onChange={(e) => set({ persona_id: e.target.value || null })}>
+              <option value="">—</option>
+              {datos.personal.filter((p) => p.inicio).map((p) => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+            </select>
+          </label>
+          <label>Moneda
+            <select value={nuevo.moneda} onChange={(e) => set({ moneda: e.target.value, tipo_cambio: e.target.value === 'USD' ? (nuevo.tipo_cambio ?? tc) : null })}>
+              <option value="ARS">ARS</option><option value="USD">USD</option>
+            </select>
+          </label>
+          <label>Monto sin IVA<input type="number" min="0" step="any" className="mono" value={nuevo.monto} onChange={(e) => set({ monto: e.target.value })} /></label>
+          {nuevo.moneda === 'USD' && <label>Tipo de cambio<input type="number" min="0" step="any" className="mono corto" value={nuevo.tipo_cambio ?? ''} onChange={(e) => set({ tipo_cambio: e.target.value })} /></label>}
+          <label>IVA
+            <select value={nuevo.iva_pct} onChange={(e) => set({ iva_pct: Number(e.target.value) })}>
+              <option value={0}>Sin IVA</option><option value={0.105}>10,5 %</option><option value={0.21}>21 %</option><option value={0.27}>27 %</option>
+            </select>
+          </label>
+          <label>Pagado el<input type="date" value={nuevo.pagado_el ?? ''} onChange={(e) => set({ pagado_el: e.target.value || null })} /></label>
+          <label>Pagado por<input value={nuevo.pagado_por} placeholder="Terra Mare" onChange={(e) => set({ pagado_por: e.target.value })} /></label>
+          <button type="button" onClick={guardar}>Agregar</button>
+        </div>
+        {error && <p className="aviso error">{error}</p>}
+      </section>
+
+      <div className="tabla-scroll">
+        <table className="tabla-sueldos gastos">
+          <thead>
+            <tr><th>Fecha</th><th>Tipo y rubro</th><th>Descripción</th><th>Proveedor · factura</th><th className="n">Monto</th><th className="n">ARS sin IVA</th><th>Pagado el</th><th>Facturado</th><th /></tr>
+          </thead>
+          <tbody>
+            {gastos.length === 0 && <tr><td colSpan={9} className="aviso">Todavía no hay gastos cargados en este mes.</td></tr>}
+            {gastos.map((g) => (
+              <tr key={g.id} className={g.reembolsable ? 'reembolsable' : ''}>
+                <td className="mono">{fecha(g.fecha)}</td>
+                <td>{etiquetaGasto(g)}</td>
+                <td>{g.descripcion}{g.persona_id && <span className="ayuda"> · {datos.personal.find((p) => p.id === g.persona_id)?.nombre}</span>}</td>
+                <td>{g.proveedor}{g.factura_numero && <span className="ayuda"> · {g.factura_numero}</span>}</td>
+                <td className="n mono">{g.moneda === 'USD' ? `USD ${dec(g.monto, 2)}` : pesos(g.monto)}{g.moneda === 'USD' && <div className="ayuda">TC {dec(g.tipo_cambio, 2)}</div>}</td>
+                <td className="n mono fuerte">{pesos(montoArs(g))}</td>
+                <td><input type="date" value={g.pagado_el ?? ''} onChange={(e) => actualizar(g, { pagado_el: e.target.value || null })} /></td>
+                <td className="ayuda">{g.reembolsable ? (g.facturado_en ? `En ${g.facturado_en}` : 'Pendiente') : '—'}</td>
+                <td><button type="button" className="terciario chico" onClick={() => borrar(g)}>Borrar</button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
   );
 }

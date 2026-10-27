@@ -293,3 +293,12 @@ td.con-origen input{ cursor:text; }
 .eval-campos input{ max-width:200px; }
 .nueva-review{ margin-top:8px; align-items:flex-end; }
 .nueva-review select{ min-height:34px; }
+
+/* Operación */
+.nuevo-gasto{ margin-top:24px; }
+.nuevo-gasto .campos{ margin-top:8px; align-items:flex-end; }
+.nuevo-gasto select{ min-height:34px; }
+.nuevo-gasto input.mono{ width:140px; }
+.rubros{ margin-top:16px; max-width:640px; }
+.gastos{ margin-top:16px; }
+.gastos tr.reembolsable td:nth-child(2){ color:var(--tm-blue); font-weight:600; }

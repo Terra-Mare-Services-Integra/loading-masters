@@ -340,3 +340,25 @@ export async function agregarReview(evaluacionId, review) {
 export async function borrarReview(id) {
   ok(await supabase.from('reviews_360').delete().eq('id', id));
 }
+
+// ─── Gastos de operación ─────────────────────────────────────────────────────
+
+export async function leerGastos() {
+  return ok(await supabase.from('gastos_operacion').select('*').order('fecha').order('created_at'))
+    .map((g) => ({ ...g, monto: Number(g.monto), iva_pct: Number(g.iva_pct), tipo_cambio: g.tipo_cambio === null ? null : Number(g.tipo_cambio) }));
+}
+
+export async function guardarGasto(gasto) {
+  const { id, created_at, updated_at, updated_by, ...campos } = gasto;
+  const q = id ? supabase.from('gastos_operacion').update(campos).eq('id', id) : supabase.from('gastos_operacion').insert(campos);
+  return ok(await q.select('*').single());
+}
+
+export async function borrarGasto(id) {
+  ok(await supabase.from('gastos_operacion').delete().eq('id', id));
+}
+
+export async function marcarReembolsablesFacturados(ids, mes) {
+  if (!ids.length) return;
+  ok(await supabase.from('gastos_operacion').update({ facturado_en: mes }).in('id', ids));
+}
