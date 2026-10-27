@@ -78,7 +78,7 @@ export async function registrarProforma(certificacionId, proforma) {
         subtotal: proforma.subtotal,
         total: proforma.total,
       })
-      .select('id, numero, total, emitida_at, emitida_por, datos')
+      .select('id, numero, total, emitida_at, emitida_por, datos, estado, enviada_el, reemplazada_por, motivo_anulacion, estado_at, estado_por')
       .single(),
   );
 }
@@ -87,7 +87,7 @@ export async function leerProformas(certificacionId) {
   return ok(
     await supabase
       .from('proformas')
-      .select('id, numero, total, emitida_at, emitida_por, datos')
+      .select('id, numero, total, emitida_at, emitida_por, datos, estado, enviada_el, reemplazada_por, motivo_anulacion, estado_at, estado_por')
       .eq('certificacion_id', certificacionId)
       .order('emitida_at', { ascending: false }),
   );
@@ -196,4 +196,15 @@ export async function leerSeriesRango(meses, mesesIpc) {
     ipc: Object.fromEntries(ok(ipc).map((f) => [f.mes, { valor: Number(f.valor), mes: f.mes, fuente: f.fuente }])),
     usd: primerDia,
   };
+}
+
+// Estado de las proformas emitidas: la que se mandó a VMOS (reemplaza a la anterior y mueve la fecha
+// de proforma de la facturación) o anulada con motivo. No se borran.
+export async function marcarProformaEnviada(id, fecha) {
+  const { error } = await supabase.rpc('marcar_proforma_enviada', { p_id: id, p_fecha: fecha });
+  if (error) throw error;
+}
+
+export async function anularProforma(id, motivo) {
+  ok(await supabase.from('proformas').update({ estado: 'anulada', motivo_anulacion: motivo }).eq('id', id).select('id').single());
 }

@@ -177,3 +177,18 @@ label.check input{ min-height:0; width:16px; height:16px; }
 
 .ventana-cabeza .chips{ align-self:flex-start; }
 .chip{ white-space:nowrap; display:inline-block; line-height:1.4; }
+
+/* Estados de proforma */
+.acciones-proforma{ display:flex; gap:6px; justify-content:flex-end; align-items:center; flex-wrap:wrap; }
+.acciones-proforma input{ min-height:28px; padding:2px 6px; }
+.chip.proforma-chip-enviada{ background:#1E7A5B; border-color:#1E7A5B; color:var(--tm-white); }
+.chip.proforma-chip-emitida{ border-color:var(--tm-blue); color:var(--tm-blue); }
+.chip.proforma-chip-reemplazada{ color:var(--text-muted); }
+.chip.proforma-chip-anulada{ border-color:var(--tm-critical); color:var(--tm-critical); }
+.historial tr.proforma-enviada td{ background:#E8F3EE; }
+.historial tr.proforma-reemplazada td, .historial tr.proforma-anulada td{ color:var(--text-muted); }
+.estado-lado{ display:flex; flex-direction:column; gap:4px; align-items:flex-end; }
+.enviada-resumen{ font-size:13px; font-weight:600; color:#1E7A5B; }
+.enviada-resumen.pendiente{ color:#C97A16; font-weight:500; }
+.historial td.mono, .historial td.n{ white-space:nowrap; }
+.historial .tabla-scroll{ margin-top:12px; border:0; }

@@ -334,7 +334,15 @@ function Facturacion({ id, onCambioResumen }) {
           {periodoValido && <div className="periodo mono">{fecha(periodo.desde)} – {fecha(periodo.hasta)} · {dias.length} días</div>}
           <div className="filete" />
         </div>
-        <EstadoGuardado estado={estado} />
+        <div className="estado-lado">
+          <EstadoGuardado estado={estado} />
+          {(() => {
+            const enviada = proformas.find((p) => p.estado === 'enviada');
+            return enviada
+              ? <div className="enviada-resumen">Enviada a VMOS: <span className="mono">{enviada.numero}</span> el {fecha(enviada.enviada_el)}</div>
+              : <div className="enviada-resumen pendiente">Proforma todavía no enviada a VMOS</div>;
+          })()}
+        </div>
       </section>
 
       <section className="tarjeta fechas">
@@ -393,7 +401,12 @@ function Facturacion({ id, onCambioResumen }) {
             onImportar={(json) => editar((c) => desdeArchivo(json, c))}
             onLimpiar={() => editar((c) => ({ ...c, factores: {}, reembolsables: { '1d': 0 }, observaciones: '' }))} />
 
-          <Historial proformas={proformas} />
+          <Historial proformas={proformas} onCambio={async () => {
+            const [pfs, f] = await Promise.all([db.leerProformas(id), db.leerFacturacion(id)]);
+            setProformas(pfs);
+            // la fecha de envío pudo mover la fecha de proforma (ya guardada en la base)
+            setCarga((c) => ({ ...c, fechaProforma: f.fechaProforma }));
+          }} />
         </>
       )}
     </>
@@ -650,25 +663,90 @@ function Acciones({ carga, feriados, onEmitir, onImportar, onLimpiar }) {
 }
 
 // Proformas emitidas de este mes: cada una se reimprime tal cual se envió.
-function Historial({ proformas }) {
+const ESTADO_PROFORMA = { emitida: 'Emitida', enviada: 'Enviada a VMOS', reemplazada: 'Reemplazada', anulada: 'Anulada' };
+
+// Proformas emitidas de esta facturación. Cada una se reimprime tal cual se generó; se marca cuál se
+// mandó a VMOS (una sola; la anterior queda como reemplazada) o se anula con motivo. No se borran.
+function Historial({ proformas, onCambio }) {
+  const [verAnuladas, setVerAnuladas] = useState(false);
+  const [enviando, setEnviando] = useState(null); // id de la que se está marcando como enviada
+  const [fechaEnvio, setFechaEnvio] = useState(hoyIso());
+  const [error, setError] = useState('');
   if (!proformas.length) return null;
+
+  const anuladas = proformas.filter((p) => p.estado === 'anulada');
+  const visibles = verAnuladas ? proformas : proformas.filter((p) => p.estado !== 'anulada');
+  const emitidaEl = (id) => {
+    const p = proformas.find((x) => x.id === id);
+    return p ? `la emitida el ${hora.format(new Date(p.emitida_at))}` : 'otra';
+  };
+
+  async function accion(fn) {
+    setError('');
+    try {
+      await fn();
+      setEnviando(null);
+      await onCambio();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
   return (
     <section className="historial">
       <div className="overline">Proformas emitidas</div>
+      <div className="tabla-scroll">
       <table>
-        <thead><tr><th>Emitida</th><th>Número</th><th>Por</th><th className="n">Total</th><th /></tr></thead>
+        <thead><tr><th>Emitida</th><th>Número</th><th>Por</th><th className="n">Total</th><th>Estado</th><th /></tr></thead>
         <tbody>
-          {proformas.map((p) => (
-            <tr key={p.id}>
+          {visibles.map((p) => (
+            <tr key={p.id} className={`proforma-${p.estado}`}>
               <td className="mono">{hora.format(new Date(p.emitida_at))}</td>
               <td className="mono">{p.numero}</td>
               <td>{p.emitida_por}</td>
               <td className="n mono">{pesos(Number(p.total))}</td>
-              <td className="n"><button type="button" className="secundario chico" onClick={() => imprimir(p.datos)}>Reimprimir</button></td>
+              <td>
+                <span className={`chip proforma-chip-${p.estado}`}>{ESTADO_PROFORMA[p.estado]}</span>
+                <span className="ayuda">
+                  {p.estado === 'enviada' && ` el ${fecha(p.enviada_el)}`}
+                  {p.estado === 'reemplazada' && ` (enviada el ${fecha(p.enviada_el)}, reemplazada por ${emitidaEl(p.reemplazada_por)})`}
+                  {p.estado === 'anulada' && ` · ${p.motivo_anulacion}`}
+                </span>
+              </td>
+              <td className="n acciones-proforma">
+                {p.estado === 'emitida' && enviando === p.id ? (
+                  <>
+                    <input type="date" value={fechaEnvio} max={hoyIso()} onChange={(e) => setFechaEnvio(e.target.value)} />
+                    <button type="button" className="chico" disabled={!fechaEnvio}
+                      onClick={() => accion(() => db.marcarProformaEnviada(p.id, fechaEnvio))}>Confirmar envío</button>
+                    <button type="button" className="terciario chico" onClick={() => setEnviando(null)}>Cancelar</button>
+                  </>
+                ) : p.estado === 'emitida' ? (
+                  <>
+                    <button type="button" className="chico" onClick={() => { setFechaEnvio(hoyIso()); setEnviando(p.id); }}>Marcar enviada</button>
+                    <button type="button" className="terciario chico" onClick={() => {
+                      const motivo = prompt('Motivo de la anulación (por ejemplo: prueba, error en días):');
+                      if (motivo && motivo.trim()) accion(() => db.anularProforma(p.id, motivo.trim()));
+                    }}>Anular</button>
+                  </>
+                ) : null}
+                <button type="button" className="secundario chico" onClick={() => imprimir(p.datos)}>Reimprimir</button>
+              </td>
             </tr>
           ))}
         </tbody>
       </table>
+      </div>
+      {anuladas.length > 0 && (
+        <button type="button" className="terciario chico" onClick={() => setVerAnuladas((v) => !v)}>
+          {verAnuladas ? 'Ocultar anuladas' : `Ver anuladas (${anuladas.length})`}
+        </button>
+      )}
+      <p className="aviso">
+        Al marcar una como enviada, su fecha de envío pasa a ser la fecha de proforma de la facturación y desde ahí se
+        calculan el plazo de VMOS, la factura y el vencimiento. Las proformas no se borran: las de prueba se anulan.
+      </p>
+      {error && <p className="aviso error">Error: {error}</p>}
     </section>
   );
 }

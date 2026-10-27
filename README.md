@@ -84,8 +84,11 @@ Proyecto propio `loading-masters` (ref `sehlulimgrxdterocaml`, sa-east-1, org In
   si se puede pedir), más el paso de referencia mar-26 → oct-26.
 - `ajustes`: pedidos de revisión por ventana (solicitado / aprobado / rechazado), con los índices,
   la base, el factor y los precios resultantes congelados al pedir.
-- `proformas`: cada emisión guarda la foto exacta de lo enviado; no se editan ni se borran, y se
-  pueden reimprimir desde el historial.
+- `proformas`: cada emisión guarda la foto exacta de lo generado; no se editan ni se borran, y se
+  pueden reimprimir desde el historial. Estados: **emitida** → **enviada** a VMOS (una sola por
+  facturación; la enviada anterior pasa a **reemplazada**; su fecha de envío pasa a ser la fecha de
+  proforma de la facturación) o **anulada** con motivo. Una enviada no se anula: se reemplaza.
+  Lo controla la base (trigger `proteger_proforma` y función `marcar_proforma_enviada`).
 - **Acceso**: email y contraseña, con confirmación por email. Las políticas RLS solo dejan leer y
   escribir a cuentas `@terra-mare.com.ar` (función `es_usuario_autorizado()`); para sumar otro
   dominio hay que cambiarla ahí y en `src/lib/supabase.js`.
