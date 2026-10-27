@@ -7,6 +7,7 @@ export const CONTRATO_VMOS = {
   oferta: '1/2026',
   moneda: 'ARS',
   inicioComputo: '2026-10',
+  inicioServicio: '2026-10-26', // inicio del servicio (cl. 3.4: primeras capacitaciones en el Sitio)
 
   // Período de certificación: del día 21 de un mes al 20 del siguiente.
   periodo: { diaInicio: 21, diaCierre: 20 },

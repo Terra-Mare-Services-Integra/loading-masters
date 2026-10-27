@@ -14,6 +14,10 @@ const desdeFila = (fila) => ({
   numero: fila.numero,
   fechaProforma: fila.fecha_proforma,
   fechaFactura: fila.fecha_factura ?? '',
+  mes: fila.mes,
+  facturaNumero: fila.factura_numero ?? '',
+  facturaEmitidaEl: fila.factura_emitida_el ?? '',
+  cobradaEl: fila.cobrada_el ?? '',
   factores: fila.factores,
   reembolsables: fila.reembolsables,
   observaciones: fila.observaciones,
@@ -27,6 +31,10 @@ const aFila = (carga, total) => ({
   numero: carga.numero,
   fecha_proforma: carga.fechaProforma,
   fecha_factura: carga.fechaFactura || null,
+  mes: carga.mes,
+  factura_numero: carga.facturaNumero || null,
+  factura_emitida_el: carga.facturaEmitidaEl || null,
+  cobrada_el: carga.cobradaEl || null,
   factores: carga.factores,
   reembolsables: carga.reembolsables,
   observaciones: carga.observaciones,
@@ -35,8 +43,19 @@ const aFila = (carga, total) => ({
 
 export async function listarFacturaciones() {
   return ok(
-    await supabase.from('certificaciones').select('id, nombre, desde, hasta, total').order('desde', { ascending: false }),
+    await supabase.from('certificaciones').select('id, nombre, mes, desde, hasta, total').order('desde', { ascending: false }),
   );
+}
+
+// Facturaciones de todos los meses, con lo necesario para el estado y el P&L.
+export async function listarFacturacionesPorMes() {
+  const filas = ok(await supabase.from('certificaciones')
+    .select('id, nombre, mes, desde, hasta, total, factores, factura_emitida_el, cobrada_el, observaciones, numero'));
+  return Object.fromEntries(filas.map((f) => [f.mes, {
+    id: f.id, nombre: f.nombre, mes: f.mes, desde: f.desde, hasta: f.hasta, total: Number(f.total),
+    factores: f.factores, facturaEmitidaEl: f.factura_emitida_el, cobradaEl: f.cobrada_el,
+    observaciones: f.observaciones, numero: f.numero,
+  }]));
 }
 
 export async function leerFacturacion(id) {
@@ -233,4 +252,23 @@ export async function restaurarEscenario(clave, original) {
 
 export async function leerReferencia(clave) {
   return ok(await supabase.from('referencias').select('valor').eq('clave', clave).maybeSingle())?.valor ?? null;
+}
+
+// ─── Capitanes y tipo de cambio para el P&L ──────────────────────────────────
+
+export async function leerPersonal() {
+  return ok(await supabase.from('personal').select('*').order('rol', { ascending: false }).order('nombre')).map((p) => ({
+    id: p.id, nombre: p.nombre, rol: p.rol, inicio: p.inicio, fin: p.fin,
+    sueldoBrutoArs: Number(p.sueldo_bruto_ars), bonoAnualUsd: Number(p.bono_anual_usd), osdeCostoArs: Number(p.osde_costo_ars),
+    notas: p.notas,
+  }));
+}
+
+// Dólar del primer día hábil de cada mes desde `desdeMes`; para los meses sin dato, el último conocido.
+export async function leerDolarPorMes(desdeMes) {
+  const filas = ok(await supabase.from('serie_usd').select('fecha, valor').gte('fecha', `${desdeMes}-01`).order('fecha'));
+  const primero = {};
+  for (const f of filas) primero[f.fecha.slice(0, 7)] ??= Number(f.valor);
+  const ultimo = filas.length ? Number(filas.at(-1).valor) : null;
+  return { porMes: primero, ultimo };
 }

@@ -8,7 +8,8 @@ import { supabase, DOMINIOS } from './lib/supabase.js';
 import { armarProforma, comprimirTramos, expandirTramos } from './proforma/armar.js';
 import { renderProforma } from './proforma/plantilla.js';
 import * as db from './datos.js';
-import { calcularResultado, completarEscenario, CLAVES_ESCENARIOS } from './lib/resultado.js';
+import { completarEscenario } from './lib/resultado.js';
+import { periodosContrato, calcularPnl } from './lib/pnl.js';
 
 const MENSUALES = CONTRATO_VMOS.items.filter((i) => i.tipo === 'mensual');
 const DOW = ['D', 'L', 'M', 'M', 'J', 'V', 'S'];
@@ -19,30 +20,8 @@ const hora = new Intl.DateTimeFormat('es-AR', { dateStyle: 'short', timeStyle: '
 const pesos = (x) => `$ ${ars.format(x)}`;
 const fecha = (iso) => iso.split('-').reverse().join('/');
 const lineas = (texto) => texto.split('\n').map((s) => s.trim()).filter(Boolean);
-const finDeMes = (iso) => {
-  const d = parse(iso);
-  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).toISOString().slice(0, 10);
-};
 
 const proximoHabil = (iso) => (esHabil(iso) ? iso : proximoHabil(sumarDias(iso, 1)));
-
-// Propuesta para una facturación nueva: arranca el día siguiente a la última y llega a fin de ese mes.
-function propuestaNueva(ultima) {
-  const desde = ultima ? sumarDias(ultima.hasta, 1) : new Date().toISOString().slice(0, 10);
-  const hasta = finDeMes(desde);
-  const mes = parse(hasta).getUTCMonth();
-  return {
-    nombre: `Facturar ${MESES[mes]}`,
-    desde,
-    hasta,
-    numero: `PF-${hasta.slice(0, 7)}`,
-    fechaProforma: proximoHabil(hasta.slice(0, 8) + '20'), // día 20 del mes, o el hábil siguiente
-    fechaFactura: '',
-    factores: {},
-    reembolsables: { '1d': 0 },
-    observaciones: '',
-  };
-}
 
 // El JSON de archivo usa tramos (igual que certificaciones/*.json); la app trabaja por día.
 function aArchivo(carga, feriados) {
@@ -150,14 +129,14 @@ function Ingreso() {
 
 function Certificacion() {
   const [vista, setVista] = useState('inicio');
+  if (vista === 'inicio') return <Inicio onAbrir={setVista} />;
+  const titulo = MODULOS.find((m) => m.id === vista)?.nombre;
   return (
     <>
-      <nav className="vistas">
-        {[['inicio', 'Inicio'], ['facturaciones', 'Facturación'], ['formula', 'Fórmula de ajuste'], ['resultado', 'Resultado']].map(([id, n]) => (
-          <button key={id} type="button" className={`vista ${vista === id ? 'activa' : ''}`} onClick={() => setVista(id)}>{n}</button>
-        ))}
-      </nav>
-      {vista === 'inicio' && <Inicio onAbrir={setVista} />}
+      <div className="barra-volver">
+        <button type="button" className="terciario" onClick={() => setVista('inicio')}>← Volver al menú principal</button>
+        <span className="barra-volver-titulo">{titulo}</span>
+      </div>
       {vista === 'facturaciones' && <Facturaciones />}
       {vista === 'formula' && <main><SeguimientoFormula /></main>}
       {vista === 'resultado' && <Resultado />}
@@ -165,79 +144,126 @@ function Certificacion() {
   );
 }
 
-function Facturaciones() {
-  const [lista, setLista] = useState(null);
-  const [seleccion, setSeleccion] = useState(null);
-  const [nueva, setNueva] = useState(null);
+// Todo lo que necesita el contrato mes a mes: períodos, facturaciones, capitanes, supuestos y dólar.
+function useContrato() {
+  const [datos, setDatos] = useState(null);
   const [error, setError] = useState('');
-
-  async function recargarLista(elegir) {
-    const filas = await db.listarFacturaciones();
-    setLista(filas);
-    setSeleccion((actual) => elegir ?? actual ?? filas[0]?.id ?? null);
-    if (!filas.length) setNueva(propuestaNueva(null));
-  }
+  const [version, setVersion] = useState(0);
 
   useEffect(() => {
-    recargarLista().catch((e) => setError(e.message));
-  }, []);
+    Promise.all([
+      db.leerEscenarios(), db.listarFacturacionesPorMes(), db.leerPersonal(), db.leerReferencia('cargas_sociales'),
+      db.leerReferencia('inicios'), db.leerAjustes(), db.leerDolarPorMes(CONTRATO_VMOS.inicioServicio.slice(0, 7)),
+    ])
+      .then(([escenarios, facturaciones, personal, cargas, inicios, ajustes, dolar]) => {
+        const esperado = escenarios.esperado && completarEscenario(escenarios.esperado.supuestos);
+        const arranque = escenarios.arranque && completarEscenario(escenarios.arranque.supuestos);
+        if (!esperado || !arranque || !cargas) throw new Error('Faltan los supuestos o las cargas sociales en la base de datos');
+        const periodos = periodosContrato(esperado.mesesContrato);
+        const fx = (mes) => dolar.porMes[mes] ?? dolar.ultimo ?? esperado.fx;
+        const filas = calcularPnl({
+          periodos, facturaciones, personal, cargas, fx,
+          escenarios: { arranque, esperado },
+          ajustes: ajustes.filter((a) => a.estado === 'aprobado'),
+          inicioSeguros: inicios?.seguros ?? null,
+        });
+        setDatos({ periodos, facturaciones, personal, filas, inicios: inicios ?? {}, arranque });
+      })
+      .catch((e) => setError(e.message));
+  }, [version]);
 
-  async function crear(datos) {
+  return { datos, error, recargar: () => setVersion((v) => v + 1) };
+}
+
+const ESTADO_MES = {
+  cobrado: { color: 'verde', texto: 'Facturado y cobrado' },
+  facturado: { color: 'amarilla', texto: 'Facturado' },
+  proyeccion: { color: 'gris', texto: 'Proyección' },
+};
+const millones = (x) => `$ ${dec(x / 1e6, 1)} M`;
+
+// Nueva facturación de un mes, heredando de la anterior: el factor del último día de cada ítem, las
+// observaciones y la numeración.
+function facturacionDesdeAnterior(periodo, anterior, factorInicial) {
+  const factores = {};
+  for (const codigo of Object.keys(anterior?.factores ?? { 1: null })) {
+    const factor = anterior ? anterior.factores[codigo]?.[anterior.hasta] : factorInicial;
+    if (factor) factores[codigo] = Object.fromEntries(rangoDias(periodo.desde, periodo.hasta).map((d) => [d, factor]));
+  }
+  const dia20 = `${periodo.mes}-20`;
+  return {
+    nombre: `Facturar ${periodo.nombre.split(' ')[0]}`,
+    mes: periodo.mes,
+    desde: periodo.desde,
+    hasta: periodo.hasta,
+    numero: `PF-${periodo.mes}`,
+    fechaProforma: proximoHabil(dia20 < periodo.hasta ? dia20 : periodo.hasta),
+    fechaFactura: '',
+    factores,
+    reembolsables: { '1d': 0 },
+    observaciones: anterior?.observaciones ?? '',
+  };
+}
+
+function Facturaciones() {
+  const { datos, error, recargar } = useContrato();
+  const [abierta, setAbierta] = useState(null);
+  const [errorCrear, setErrorCrear] = useState('');
+  const hoy = hoyIso();
+
+  if (!datos) return <main>{error ? <p className="aviso error">Error: {error}</p> : 'Cargando…'}</main>;
+
+  if (abierta) {
+    return (
+      <main>
+        <button type="button" className="terciario volver-meses" onClick={() => { setAbierta(null); recargar(); }}>← Volver a los meses</button>
+        <Facturacion key={abierta} id={abierta} onCambioResumen={() => {}} />
+      </main>
+    );
+  }
+
+  async function abrir(fila) {
+    const existente = datos.facturaciones[fila.mes];
+    if (existente) return setAbierta(existente.id);
+    setErrorCrear('');
     try {
-      const creada = await db.crearFacturacion(datos, 0);
-      setNueva(null);
-      await recargarLista(creada.id);
+      const anterior = datos.facturaciones[datos.periodos[fila.n - 2]?.mes];
+      const creada = await db.crearFacturacion(facturacionDesdeAnterior(fila, anterior, datos.arranque.factorPrecio), fila.ingresoCoc);
+      setAbierta(creada.id);
     } catch (e) {
-      setError(e.message);
+      setErrorCrear(e.message);
     }
   }
 
-  if (lista === null) return <main>{error ? <p className="aviso error">Error: {error}</p> : 'Cargando…'}</main>;
-
   return (
     <main>
-      <section className="facturaciones">
-        <div className="overline">Facturaciones</div>
-        <div className="fila">
-          {lista.map((f) => (
-            <button key={f.id} type="button" className={`pestana ${f.id === seleccion && !nueva ? 'activa' : ''}`}
-              onClick={() => { setNueva(null); setSeleccion(f.id); }}>
-              <span>{f.nombre}</span>
-              <span className="mono">{fecha(f.desde)} – {fecha(f.hasta)}</span>
-            </button>
-          ))}
-          <button type="button" className="secundario" onClick={() => setNueva(propuestaNueva(lista[0]))}>+ Nueva facturación</button>
+      <section className="encabezado">
+        <div>
+          <h1>Facturación.</h1>
+          <div className="filete" />
+          <p className="aviso">Un mes por cajita. Cada mes se habilita cuando empieza y arranca con los valores del mes anterior.</p>
         </div>
-        {error && <p className="aviso error">Error: {error}</p>}
+        <div className="leyenda">
+          {Object.values(ESTADO_MES).map((e) => <span key={e.color}><span className={`bolita ${e.color}`} /> {e.texto}</span>)}
+        </div>
       </section>
-
-      {nueva
-        ? <NuevaFacturacion inicial={nueva} onCrear={crear} onCancelar={lista.length ? () => setNueva(null) : null} />
-        : seleccion && <Facturacion key={seleccion} id={seleccion} onCambioResumen={() => recargarLista()} />}
+      {errorCrear && <p className="aviso error">Error: {errorCrear}</p>}
+      <div className="meses">
+        {datos.filas.map((fila) => {
+          const disponible = fila.cargada || fila.desde <= hoy;
+          const e = ESTADO_MES[fila.estado];
+          return (
+            <button key={fila.mes} type="button" className={`mes-card ${fila.cargada ? 'cargada' : ''}`} disabled={!disponible}
+              title={disponible ? '' : `Se habilita el ${fecha(fila.desde)}`} onClick={() => abrir(fila)}>
+              <span className="mes-fila"><span className="mes-n mono">{String(fila.n).padStart(2, '0')}</span><span className={`bolita ${e.color}`} title={e.texto} /></span>
+              <span className="mes-nombre">{fila.nombre}</span>
+              <span className="mes-fechas mono">{fecha(fila.desde)} – {fecha(fila.hasta)}</span>
+              <span className={`mes-monto mono ${fila.real ? '' : 'proyectado'}`}>{millones(fila.ingresoCoc)}</span>
+            </button>
+          );
+        })}
+      </div>
     </main>
-  );
-}
-
-function NuevaFacturacion({ inicial, onCrear, onCancelar }) {
-  const [d, setD] = useState(inicial);
-  const set = (c) => setD((x) => ({ ...x, ...c }));
-  const valido = d.nombre.trim() && d.desde && d.hasta && d.hasta >= d.desde && d.fechaProforma;
-  return (
-    <section className="tarjeta nueva">
-      <div className="overline">Nueva facturación</div>
-      <div className="campos">
-        <label className="ancho">Nombre<input value={d.nombre} onChange={(e) => set({ nombre: e.target.value })} /></label>
-        <label>Inicio<input type="date" value={d.desde} onChange={(e) => set({ desde: e.target.value })} /></label>
-        <label>Fin<input type="date" value={d.hasta} onChange={(e) => set({ hasta: e.target.value })} /></label>
-        <label>Envío de proforma<input type="date" value={d.fechaProforma} onChange={(e) => set({ fechaProforma: e.target.value })} /></label>
-        <label>Número<input value={d.numero} onChange={(e) => set({ numero: e.target.value })} /></label>
-      </div>
-      <p className="aviso">La factura se calcula a los {CONTRATO_VMOS.plazos.diasHabilesRevisionProforma} días hábiles del envío de la proforma y el vencimiento a los {CONTRATO_VMOS.plazos.diasPagoFactura} días de la factura; se pueden ajustar después.</p>
-      <div className="fila">
-        <button type="button" disabled={!valido} onClick={() => onCrear({ ...d, nombre: d.nombre.trim() })}>Crear</button>
-        {onCancelar && <button type="button" className="terciario" onClick={onCancelar}>Cancelar</button>}
-      </div>
-    </section>
   );
 }
 
@@ -371,6 +397,15 @@ function Facturacion({ id, onCambioResumen }) {
           <label>Vencimiento de pago
             <input type="date" value={proforma?.calendario.vencimientoPago ?? ''} readOnly tabIndex={-1} className="calculado" />
           </label>
+        </div>
+        <div className="campos factura-cobro">
+          <label>Factura N°<input value={carga.facturaNumero} placeholder="0001-00000000" onChange={(e) => set({ facturaNumero: e.target.value })} /></label>
+          <label>Factura emitida el<input type="date" value={carga.facturaEmitidaEl} onChange={(e) => set({ facturaEmitidaEl: e.target.value })} /></label>
+          <label>Cobrada el<input type="date" value={carga.cobradaEl} disabled={!carga.facturaEmitidaEl} onChange={(e) => set({ cobradaEl: e.target.value })} /></label>
+          <span className={`estado-mes ${carga.cobradaEl ? 'verde' : carga.facturaEmitidaEl ? 'amarilla' : 'gris'}`}>
+            <span className={`bolita ${carga.cobradaEl ? 'verde' : carga.facturaEmitidaEl ? 'amarilla' : 'gris'}`} />
+            {carga.cobradaEl ? 'Facturado y cobrado' : carga.facturaEmitidaEl ? 'Facturado, falta cobrar' : 'Sin facturar'}
+          </span>
         </div>
         {!periodoValido && <p className="aviso error">El fin tiene que ser igual o posterior al inicio.</p>}
       </section>
@@ -1179,9 +1214,9 @@ const MOTIVOS = { ipc: 'IPC > 15 %', usd: 'dólar > 15 %', paritaria: 'acuerdo g
 // ─── Inicio en cajitas ───────────────────────────────────────────────────────
 
 const MODULOS = [
-  { id: 'facturaciones', nombre: 'Facturación', desc: 'Certificaciones, proformas y envíos a VMOS', icono: 'FAC' },
-  { id: 'formula', nombre: 'Fórmula de ajuste', desc: 'Índices, base y disparadores del Anexo II', icono: 'AJU' },
-  { id: 'resultado', nombre: 'Resultado', desc: 'Proyección mensual: arranque 75 % y esperado 100 %', icono: 'RES' },
+  { id: 'facturaciones', nombre: 'Facturación', desc: 'Un mes por cajita: certificación, proforma, factura y cobro' },
+  { id: 'formula', nombre: 'Fórmula de ajuste', desc: 'Índices, base y disparadores del Anexo II' },
+  { id: 'resultado', nombre: 'Resultado', desc: 'P&L mes a mes: real y proyectado' },
   { id: 'sueldos', nombre: 'Sueldos', desc: 'Capitanes Sr y Jr: sueldo, cargas, OSDE, bono' },
   { id: 'sergio', nombre: 'Sergio', desc: 'Superintendente técnico: fijo y participación' },
   { id: 'operacion', nombre: 'Operación', desc: 'Vuelos, remises, hoteles, viáticos, EPP' },
@@ -1193,21 +1228,6 @@ const MODULOS = [
 const ACTIVOS = ['facturaciones', 'formula', 'resultado'];
 
 function Inicio({ onAbrir }) {
-  const [datos, setDatos] = useState(null);
-  useEffect(() => {
-    Promise.all([db.listarFacturaciones(), db.leerEscenarios()])
-      .then(([facturaciones, escenarios]) => setDatos({ facturaciones, escenarios }))
-      .catch(() => setDatos({ facturaciones: [], escenarios: {} }));
-  }, []);
-
-  const ultima = datos?.facturaciones[0];
-  const esperado = datos?.escenarios.esperado && calcularResultado(completarEscenario(datos.escenarios.esperado.supuestos));
-  const detalle = {
-    facturaciones: ultima ? `${ultima.nombre} · ${fecha(ultima.desde)} – ${fecha(ultima.hasta)}` : 'Sin facturaciones',
-    formula: 'Base: contrato, octubre 2026',
-    resultado: esperado ? `Esperado: USD ${dec(esperado.total.generacion, 0)}/mes para TM` : '',
-  };
-
   return (
     <main>
       <section className="encabezado">
@@ -1218,216 +1238,118 @@ function Inicio({ onAbrir }) {
         </div>
       </section>
       <div className="cajitas">
-        {MODULOS.map((m) => {
-          const activo = ACTIVOS.includes(m.id);
-          return activo ? (
-            <button key={m.id} type="button" className="cajita" onClick={() => onAbrir(m.id)}>
-              <span className="cajita-nombre">{m.nombre}</span>
-              <span className="cajita-desc">{m.desc}</span>
-              {detalle[m.id] && <span className="cajita-dato">{detalle[m.id]}</span>}
-            </button>
-          ) : (
-            <div key={m.id} className="cajita apagada">
-              <span className="cajita-nombre">{m.nombre}</span>
-              <span className="cajita-desc">{m.desc}</span>
-              <span className="cajita-dato">A armar</span>
-            </div>
-          );
-        })}
+        {MODULOS.map((m) => (ACTIVOS.includes(m.id) ? (
+          <button key={m.id} type="button" className="cajita" onClick={() => onAbrir(m.id)}>
+            <span className="cajita-nombre">{m.nombre}</span>
+            <span className="cajita-desc">{m.desc}</span>
+          </button>
+        ) : (
+          <div key={m.id} className="cajita apagada">
+            <span className="cajita-nombre">{m.nombre}</span>
+            <span className="cajita-desc">{m.desc}</span>
+            <span className="cajita-dato">A armar</span>
+          </div>
+        )))}
       </div>
     </main>
   );
 }
 
-// ─── Resultado proyectado ────────────────────────────────────────────────────
-// Mismo cuadro que los Excel "Arranque contrato" y "Resultado esperado". Los supuestos se editan acá
-// y se guardan por escenario; "Volver al Excel" restaura los valores originales.
+// ─── Resultado: P&L mes a mes ────────────────────────────────────────────────
 
-const usd = (x) => `${x < 0 ? '−' : ''}${dec(Math.abs(x), 0)}`;
-const FILAS_RESULTADO = [
-  ['Ingreso CO&C', (r) => r.coc.ingreso, 'ingreso'],
-  ['Ingreso seguros (1a–1c)', (r) => r.seguros.ingreso, 'ingreso'],
-  ['Capitanes Senior', (r) => -r.coc.sueldosSr],
-  ['Capitanes Junior', (r) => -r.coc.sueldosJr],
-  ['Operación (rotación y fijos)', (r) => -r.coc.operacion],
-  ['Pólizas de seguros', (r) => -r.seguros.costoSeguros],
-  ['Estructura TM', (r) => -r.coc.estructuraTm],
-  ['Sergio · fijo', (r) => -r.coc.sgFijo],
-  ['Imprevistos', (r) => -(r.coc.imprevistos + r.seguros.imprevistos)],
-  ['Impuesto al crédito y débito', (r) => -(r.coc.credito + r.seguros.credito)],
-  ['Ingresos brutos', (r) => -(r.coc.iibb + r.seguros.iibb)],
-  ['Resultado bruto', (r) => r.total.bruto, 'subtotal'],
-  ['Sergio · participación', (r) => -r.total.participacionSg],
-  ['Generación TM', (r) => r.total.generacion, 'total'],
+const COLUMNAS_PNL = [
+  ['ingreso', 'Ingresos'],
+  ['capitanes', 'Capitanes'],
+  ['operacion', 'Operación'],
+  ['sergioFijo', 'Sergio fijo'],
+  ['impuestos', 'Imprev. e impuestos'],
+  ['bruto', 'Resultado bruto'],
+  ['participacion', 'Particip. Sergio'],
+  ['generacion', 'Generación TM'],
 ];
-
-const CAMPOS_SUPUESTOS = [
-  ['factorPrecio', 'Factor de precio (cl. 4.2)', 'número'],
-  ['ingresoCocUsd', 'Ingreso CO&C al 100 % (USD/mes)'],
-  ['ingresoSegurosUsd', 'Ingreso seguros (USD/mes)'],
-  ['capitanesSr.cantidad', 'Capitanes Senior (cantidad)', 'número'],
-  ['capitanesSr.costoUsd', 'Costo por Senior (USD/mes)'],
-  ['capitanesJr.cantidad', 'Capitanes Junior (cantidad)', 'número'],
-  ['capitanesJr.costoUsd', 'Costo por Junior (USD/mes)'],
-  ['operacionUsd', 'Operación: rotación y fijos (USD/mes)'],
-  ['costoSegurosUsd', 'Pólizas de seguros (USD/mes)'],
-  ['estructuraTmUsd', 'Estructura TM que se resta (USD/mes)'],
-  ['estructuraBaseSgUsd', 'Estructura base para Sergio (USD/mes, al 100 %)'],
-  ['sgFijoUsd', 'Sergio fijo (USD/mes, al 100 %)'],
-  ['pctImprevistos', 'Imprevistos (%)', '%'],
-  ['pctCredito', 'Impuesto al crédito y débito (%)', '%'],
-  ['pctIibb', 'Ingresos brutos (%)', '%'],
-  ['pctParticipacionSg', 'Participación de Sergio (%)', '%'],
-  ['mesesContrato', 'Meses de contrato', 'número'],
-  ['fx', 'Tipo de cambio (ARS/USD)', 'número'],
-];
-const leerCampo = (o, ruta) => ruta.split('.').reduce((x, k) => x?.[k], o);
-const conCampo = (o, ruta, v) => {
-  const [k, ...resto] = ruta.split('.');
-  return { ...o, [k]: resto.length ? conCampo(o[k], resto.join('.'), v) : v };
-};
 
 function Resultado() {
-  const [escenarios, setEscenarios] = useState(null);
-  const [error, setError] = useState('');
-  const pendientes = useRef({});
+  const { datos, error } = useContrato();
+  const [filtro, setFiltro] = useState('todo');
+  const [moneda, setMoneda] = useState('ars');
 
-  useEffect(() => {
-    db.leerEscenarios()
-      .then((guardados) => setEscenarios(Object.fromEntries(CLAVES_ESCENARIOS.filter((c) => guardados[c]).map((c) => [c, {
-        ...guardados[c],
-        supuestos: completarEscenario(guardados[c].supuestos),
-      }]))))
-      .catch((e) => setError(e.message));
-  }, []);
+  if (!datos) return <main>{error ? <p className="aviso error">Error: {error}</p> : 'Cargando…'}</main>;
 
-  if (!escenarios) return <main>{error ? <p className="aviso error">Error: {error}</p> : 'Cargando…'}</main>;
-
-  const claves = CLAVES_ESCENARIOS.filter((c) => escenarios[c]);
-  if (!claves.length) return <main><p className="aviso">Todavía no hay escenarios cargados en la base de datos.</p></main>;
-  const resultados = Object.fromEntries(claves.map((c) => [c, calcularResultado(escenarios[c].supuestos)]));
-
-  function cambiar(clave, ruta, valor) {
-    const supuestos = conCampo(escenarios[clave].supuestos, ruta, valor);
-    setEscenarios((e) => ({ ...e, [clave]: { ...e[clave], supuestos, editado: true } }));
-    clearTimeout(pendientes.current[clave]);
-    pendientes.current[clave] = setTimeout(() => {
-      db.guardarEscenario(clave, supuestos)
-        .then((actualizado) => setEscenarios((e) => ({ ...e, [clave]: { ...e[clave], actualizado } })))
-        .catch((err) => setError(err.message));
-    }, 800);
-  }
-
-  async function volverAlExcel(clave) {
-    const { original } = escenarios[clave];
-    if (!confirm(`¿Volver los supuestos de "${original.nombre}" a los valores del Excel?`)) return;
-    try {
-      clearTimeout(pendientes.current[clave]);
-      const actualizado = await db.restaurarEscenario(clave, original);
-      setEscenarios((e) => ({ ...e, [clave]: { ...e[clave], supuestos: completarEscenario(original), editado: false, actualizado } }));
-    } catch (err) {
-      setError(err.message);
-    }
-  }
+  const filas = filtro === 'actuales' ? datos.filas.filter((f) => f.real) : datos.filas;
+  const conv = (f, k) => (moneda === 'usd' ? f[k] / f.fx : f[k]);
+  const total = (k) => filas.reduce((s, f) => s + conv(f, k), 0);
+  const formato = (x) => {
+    const r = Math.round(x);
+    if (r === 0) return '—';
+    return `${r < 0 ? '−' : ''}${moneda === 'usd' ? 'USD' : '$'} ${dec(Math.abs(r), 0)}`;
+  };
+  const sinFecha = datos.personal.filter((p) => !p.inicio);
+  const activos = datos.personal.filter((p) => p.inicio);
 
   return (
     <main>
       <section className="encabezado">
         <div>
-          <h1>Resultado proyectado.</h1>
+          <h1>Resultado.</h1>
           <div className="filete" />
-          <p className="aviso">USD por mes, con las fórmulas de tus Excel "Arranque contrato" y "Resultado esperado".</p>
+          <p className="aviso">
+            Mes a mes durante el contrato. Los meses facturados toman la factura; el resto es proyección con el factor y los
+            precios vigentes. Los costos son proyectados hasta que se carguen los módulos de Sueldos, Operación y demás.
+          </p>
+        </div>
+        <div className="filtros">
+          <div className="segmentado">
+            <button type="button" className={filtro === 'actuales' ? 'activo' : ''} onClick={() => setFiltro('actuales')}>Actuales</button>
+            <button type="button" className={filtro === 'todo' ? 'activo' : ''} onClick={() => setFiltro('todo')}>Actuales + proyectados</button>
+          </div>
+          <div className="segmentado">
+            <button type="button" className={moneda === 'ars' ? 'activo' : ''} onClick={() => setMoneda('ars')}>ARS</button>
+            <button type="button" className={moneda === 'usd' ? 'activo' : ''} onClick={() => setMoneda('usd')}>USD</button>
+          </div>
         </div>
       </section>
 
       <div className="tabla-scroll">
-        <table className="tabla-resultado">
+        <table className="tabla-pnl">
           <thead>
-            <tr><th>Concepto</th>{claves.map((c) => <th key={c} className="n">{escenarios[c].supuestos.nombre}</th>)}</tr>
+            <tr><th>Mes</th>{COLUMNAS_PNL.map(([k, n]) => <th key={k} className="n">{n}</th>)}</tr>
           </thead>
           <tbody>
-            {FILAS_RESULTADO.map(([nombre, fn, tipo]) => (
-              <tr key={nombre} className={tipo ?? ''}>
-                <td>{nombre}</td>
-                {claves.map((c) => <td key={c} className="n mono">{usd(fn(resultados[c]))}</td>)}
-              </tr>
-            ))}
-            <tr className="margen">
-              <td>Margen sobre ingresos</td>
-              {claves.map((c) => <td key={c} className="n mono">{dec(resultados[c].total.margen * 100, 1)} %</td>)}
-            </tr>
-            <tr className="margen">
-              <td>Generación TM en pesos</td>
-              {claves.map((c) => <td key={c} className="n mono">$ {dec(resultados[c].total.generacion * escenarios[c].supuestos.fx, 0)}</td>)}
-            </tr>
-          </tbody>
-        </table>
-      </div>
-
-      <div className="columnas">
-        {claves.map((c) => {
-          const r = resultados[c];
-          const s = escenarios[c].supuestos;
-          return (
-            <section key={c} className="tarjeta">
-              <div className="overline">{s.nombre} · {s.mesesContrato} meses</div>
-              <div className="calendario">
-                <div><span className="mono">USD {dec(r.contrato.generacionCoc + r.contrato.generacionSeguros, 0)}</span> generación TM del contrato</div>
-                <div><span className="mono">USD {dec(r.sergio.mensual, 0)}</span> Sergio por mes (fijo + participación)</div>
-                <div><span className="mono">USD {dec(r.contrato.sergio, 0)}</span> Sergio en el contrato</div>
-                <div><span className="mono">USD {dec(r.total.participacionSg, 0)}</span> participación por mes</div>
-              </div>
-            </section>
-          );
-        })}
-      </div>
-
-      <section className="supuestos">
-        <div className="overline">Supuestos</div>
-        <p className="aviso">Se guardan solos. Sergio cobra el fijo y la estructura base escalados por el factor de precio, y su participación es el % del resultado bruto CO&C menos el % de la estructura base.</p>
-        <div className="tabla-scroll">
-          <table className="tabla-supuestos">
-            <thead><tr><th>Supuesto</th>{claves.map((c) => <th key={c} className="n">{escenarios[c].supuestos.nombre}</th>)}</tr></thead>
-            <tbody>
-              {CAMPOS_SUPUESTOS.map(([ruta, nombre, tipo]) => (
-                <tr key={ruta}>
-                  <td>{nombre}</td>
-                  {claves.map((c) => {
-                    const v = leerCampo(escenarios[c].supuestos, ruta);
-                    const mostrado = tipo === '%' ? Math.round(v * 10000) / 100 : tipo === 'número' ? v : Math.round(v * 100) / 100;
-                    return (
-                      <td key={c} className="n">
-                        <input type="number" step="any" className="mono" value={mostrado}
-                          onChange={(e) => {
-                            const n = Number(e.target.value);
-                            if (e.target.value === '' || Number.isNaN(n)) return;
-                            cambiar(c, ruta, tipo === '%' ? n / 100 : n);
-                          }} />
-                      </td>
-                    );
-                  })}
-                </tr>
-              ))}
-              <tr>
-                <td />
-                {claves.map((c) => (
-                  <td key={c} className="n">
-                    <span className="ayuda">{escenarios[c].editado ? `Editado ${hora.format(new Date(escenarios[c].actualizado.at))}` : 'Valores del Excel'}</span>
-                    {escenarios[c].editado && <button type="button" className="terciario chico" onClick={() => volverAlExcel(c)}>Volver al Excel</button>}
+            {filas.length === 0 && <tr><td colSpan={COLUMNAS_PNL.length + 1} className="aviso">Todavía no hay meses facturados.</td></tr>}
+            {filas.map((f) => (
+              <tr key={f.mes} className={f.real ? '' : 'proyectado'}>
+                <td><span className={`bolita ${ESTADO_MES[f.estado].color}`} title={ESTADO_MES[f.estado].texto} /> {f.nombre}</td>
+                {COLUMNAS_PNL.map(([k]) => (
+                  <td key={k} className={`n mono ${k === 'generacion' ? 'fuerte' : ''}`}>
+                    {formato(['ingreso', 'bruto', 'generacion'].includes(k) ? conv(f, k) : -conv(f, k))}
                   </td>
                 ))}
               </tr>
-            </tbody>
-          </table>
-        </div>
-        {escenarios.arranque && escenarios.esperado && escenarios.arranque.supuestos.operacionUsd === 0 && (
-          <p className="aviso alerta">
-            En el Excel de arranque "Costos Rotación" está vacío. En el esperado son USD {dec(escenarios.esperado.supuestos.operacionUsd, 0)}/mes
-            (rotación, fijos por empleado y remise). Si en el arranque también hay vuelos, remises y viáticos, cargalos en "Operación".
-          </p>
-        )}
-      </section>
-      {error && <p className="aviso error">Error: {error}</p>}
+            ))}
+          </tbody>
+          {filas.length > 0 && (
+            <tfoot>
+              <tr>
+                <td>Total {filtro === 'actuales' ? 'facturado' : `${filas.length} meses`}</td>
+                {COLUMNAS_PNL.map(([k]) => (
+                  <td key={k} className="n mono">{formato(['ingreso', 'bruto', 'generacion'].includes(k) ? total(k) : -total(k))}</td>
+                ))}
+              </tr>
+            </tfoot>
+          )}
+        </table>
+      </div>
+
+      <div className="notas-pnl">
+        <p className="aviso">
+          Capitanes en la proyección: {activos.map((p) => `${p.nombre.split(',')[0]} (${p.rol === 'senior' ? 'Sr' : 'Jr'}, desde ${fecha(p.inicio)})`).join(', ')}.
+          {sinFecha.length > 0 && ` Sin fecha de ingreso, fuera de la proyección: ${sinFecha.map((p) => p.nombre).join(', ')}.`}
+        </p>
+        <p className="aviso">
+          Seguros (ítems 1a–1c y pólizas): {datos.inicios.seguros ? `desde ${fecha(datos.inicios.seguros)}` : 'todavía no arrancaron, no se incluyen'}.
+          {moneda === 'usd' && ' En USD se usa el dólar BNA del primer día hábil de cada mes (o el último conocido para los meses futuros).'}
+        </p>
+      </div>
     </main>
   );
 }

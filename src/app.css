@@ -223,3 +223,48 @@ td.con-origen input{ cursor:text; }
 .tabla-supuestos td:last-child, .tabla-supuestos td:nth-child(2){ white-space:nowrap; }
 .supuestos{ margin-top:40px; }
 .aviso.alerta{ color:#C97A16; border-left:4px solid #C97A16; padding-left:12px; }
+
+/* Volver al menú principal */
+.barra-volver{ display:flex; align-items:center; gap:16px; padding:8px 32px; border-bottom:1px solid var(--border-subtle); background:var(--tm-surface); }
+.barra-volver .terciario{ padding-left:0; color:var(--tm-blue); font-weight:600; }
+.barra-volver-titulo{ font-size:13px; color:var(--text-muted); letter-spacing:.12em; text-transform:uppercase; }
+.volver-meses{ padding-left:0; color:var(--tm-blue); font-weight:600; margin-top:16px; }
+
+/* Bolitas de estado */
+.bolita{ display:inline-block; width:12px; height:12px; border-radius:50%; vertical-align:middle; flex:0 0 auto; }
+.bolita.verde{ background:#1E7A5B; }
+.bolita.amarilla{ background:#E0A526; }
+.bolita.gris{ background:var(--tm-blue-light); }
+.leyenda{ display:flex; gap:16px; flex-wrap:wrap; font-size:13px; color:var(--text-muted); align-self:flex-end; }
+
+/* Facturación: 36 meses */
+.meses{ display:grid; grid-template-columns:repeat(auto-fill, minmax(170px, 1fr)); gap:12px; margin-top:24px; }
+.mes-card{ display:flex; flex-direction:column; align-items:flex-start; gap:4px; text-align:left; background:var(--tm-white); color:var(--tm-ink);
+  border:1px solid var(--border-subtle); padding:14px; font-weight:400; min-height:118px; }
+.mes-card:hover{ background:var(--tm-blue-050); border-color:var(--tm-blue-light); }
+.mes-card.cargada{ border-top:4px solid var(--tm-blue); }
+.mes-card:disabled{ background:var(--tm-surface); color:var(--text-muted); border-color:var(--border-subtle); cursor:not-allowed; }
+.mes-fila{ display:flex; justify-content:space-between; width:100%; align-items:center; }
+.mes-n{ font-size:11px; color:var(--text-muted); }
+.mes-nombre{ font-family:var(--font-display); font-size:19px; line-height:1.15; text-transform:capitalize; }
+.mes-fechas{ font-size:11px; color:var(--text-muted); }
+.mes-monto{ margin-top:auto; font-size:13px; font-weight:500; color:var(--tm-blue-deep); }
+.mes-monto.proyectado{ color:var(--text-muted); font-style:italic; font-weight:400; }
+.factura-cobro{ margin-top:16px; padding-top:16px; border-top:1px solid var(--border-subtle); align-items:flex-end; }
+.estado-mes{ display:flex; align-items:center; gap:8px; font-size:13px; font-weight:600; align-self:center; }
+.estado-mes.verde{ color:#1E7A5B; } .estado-mes.amarilla{ color:#A07015; } .estado-mes.gris{ color:var(--text-muted); }
+
+/* Resultado: P&L mensual */
+.filtros{ display:flex; gap:12px; flex-wrap:wrap; align-self:flex-end; }
+.segmentado{ display:inline-flex; border:1px solid var(--tm-blue); }
+.segmentado button{ background:var(--tm-white); color:var(--tm-blue); border:0; min-height:32px; padding:4px 14px; }
+.segmentado button.activo{ background:var(--tm-blue); color:var(--tm-white); }
+.tabla-pnl{ width:100%; border-collapse:collapse; font-size:13px; }
+.tabla-pnl th{ text-align:left; font-size:12px; font-weight:600; padding:8px 10px; border-bottom:1px solid var(--tm-blue-light); white-space:nowrap; }
+.tabla-pnl td{ padding:6px 10px; border-bottom:1px solid var(--border-subtle); white-space:nowrap; }
+.tabla-pnl td:first-child{ text-transform:capitalize; }
+.tabla-pnl .n{ text-align:right; }
+.tabla-pnl tr.proyectado td{ color:var(--text-muted); font-style:italic; }
+.tabla-pnl tfoot td{ font-weight:600; background:var(--tm-blue-deep); color:var(--tm-white); border:0; }
+.notas-pnl{ margin-top:16px; }
+@media (max-width: 900px){ .barra-volver{ padding:8px 16px; } }
