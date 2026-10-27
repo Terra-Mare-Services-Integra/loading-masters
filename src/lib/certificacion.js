@@ -1,10 +1,10 @@
 import { CONTRATO_VMOS } from './contrato.js';
-import { rangoDias, sumarDias, sumarDiasHabiles } from './fechas.js';
+import { parse, rangoDias, sumarDias, sumarDiasHabiles } from './fechas.js';
 
 const redondear = (x) => Math.round(x * 100) / 100;
 
 // Período que cierra en el mes `mesCierre` ('YYYY-MM'): del 21 del mes anterior al 20.
-// Ej.: '2026-11' → 2026-10-21 a 2026-11-20.
+// Ej.: '2026-11' → 2026-10-21 a 2026-11-20. Se usa como período sugerido.
 export function periodoDeCierre(mesCierre, contrato = CONTRATO_VMOS) {
   const { diaInicio, diaCierre } = contrato.periodo;
   const [y, m] = mesCierre.split('-').map(Number);
@@ -16,13 +16,19 @@ export function periodoDeCierre(mesCierre, contrato = CONTRATO_VMOS) {
   };
 }
 
-// Costo diario de un ítem mensual: precio mensual / días del período.
-export function costoDiario(precioMensual, diasPeriodo) {
-  return precioMensual / diasPeriodo;
+export function diasDelMes(fecha) {
+  const d = parse(fecha);
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+}
+
+// Costo diario de un ítem mensual en una fecha: precio mensual / días de ese mes calendario
+// (o / `divisor` si se fija uno). Así un mes calendario completo vale exactamente el precio mensual.
+export function costoDiario(precioMensual, fecha, divisor) {
+  return precioMensual / (divisor ?? diasDelMes(fecha));
 }
 
 /**
- * Calcula la certificación de un período.
+ * Calcula la certificación de un período cualquiera (puede abarcar más de un mes).
  *
  * @param {object} p
  * @param {{desde: string, hasta: string}} p.periodo
@@ -31,12 +37,11 @@ export function costoDiario(precioMensual, diasPeriodo) {
  *   Fechas ausentes cuentan como 0.
  * @param {Record<string, number>} [p.reembolsables] Gastos a reembolsar por código de ítem (sin fee).
  * @param {Record<string, number>} [p.precios] Precios mensuales vigentes (tras ajustes) por código.
- * @param {number} [p.divisor] Días contra los que se prorratea el precio mensual.
- *   Por defecto, los días del período (31 para 21/10–20/11).
+ * @param {number} [p.divisor] Divisor fijo de días (p. ej. 31 como el Excel original). Por defecto,
+ *   los días del mes calendario de cada fecha.
  */
 export function certificar({ periodo, factores, reembolsables = {}, precios = {}, divisor }, contrato = CONTRATO_VMOS) {
   const dias = rangoDias(periodo.desde, periodo.hasta);
-  const div = divisor ?? dias.length;
 
   const items = contrato.items.map((item) => {
     if (item.tipo === 'reembolsable') {
@@ -46,37 +51,38 @@ export function certificar({ periodo, factores, reembolsables = {}, precios = {}
     const precioMensual = precios[item.codigo] ?? item.precioMensual;
     const porDia = dias.map((fecha) => ({ fecha, factor: factores[item.codigo]?.[fecha] ?? 0 }));
     const diasEquivalentes = porDia.reduce((s, d) => s + d.factor, 0);
+    // Meses equivalentes: suma de factor / días del mes de cada fecha.
+    const mesesEquivalentes = porDia.reduce((s, d) => s + d.factor / (divisor ?? diasDelMes(d.fecha)), 0);
     return {
       ...item,
       precioMensual,
-      costoDiario: costoDiario(precioMensual, div),
       porDia,
       diasEquivalentes,
-      fraccionMes: diasEquivalentes / div,
-      importe: redondear((precioMensual * diasEquivalentes) / div),
+      mesesEquivalentes,
+      importe: redondear(precioMensual * mesesEquivalentes),
     };
   });
 
   return {
     periodo,
     dias,
-    divisor: div,
+    divisor: divisor ?? null,
     items,
     total: redondear(items.reduce((s, i) => s + i.importe, 0)),
   };
 }
 
-// Calendario del circuito: proforma al cierre, VMOS tiene N días hábiles para observarla,
-// después se factura y el pago vence a los 30 días corridos.
-export function calendarioCobro(periodo, { feriados = [] } = {}, contrato = CONTRATO_VMOS) {
+// Calendario del circuito: se envía la proforma, VMOS tiene N días hábiles para observarla,
+// al cumplirse ese plazo se emite la factura y el pago vence a los 30 días corridos.
+// `factura` permite fijar otra fecha de factura a mano.
+export function calendarioCobro(fechaProforma, { feriados = [], factura } = {}, contrato = CONTRATO_VMOS) {
   const { diasHabilesRevisionProforma, diasPagoFactura } = contrato.plazos;
-  const envioProforma = periodo.hasta;
-  const finRevision = sumarDiasHabiles(envioProforma, diasHabilesRevisionProforma, feriados);
-  const factura = sumarDiasHabiles(finRevision, 1, feriados);
+  const finRevision = sumarDiasHabiles(fechaProforma, diasHabilesRevisionProforma, feriados);
+  const fechaFactura = factura ?? finRevision;
   return {
-    envioProforma,
+    envioProforma: fechaProforma,
     finRevision,
-    factura,
-    vencimientoPago: sumarDias(factura, diasPagoFactura),
+    factura: fechaFactura,
+    vencimientoPago: sumarDias(fechaFactura, diasPagoFactura),
   };
 }

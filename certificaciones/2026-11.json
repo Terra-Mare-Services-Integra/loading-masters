@@ -1,12 +1,14 @@
 {
-  "cierre": "2026-11",
+  "nombre": "Facturar noviembre",
+  "desde": "2026-10-26",
+  "hasta": "2026-11-30",
+  "fechaProforma": "2026-11-20",
   "numero": "PF-2026-11",
-  "fechaEmision": "2026-11-20",
   "tramos": {
-    "1": [{ "desde": "2026-10-26", "hasta": "2026-11-20", "factor": 0.75 }]
+    "1": [{ "desde": "2026-10-26", "hasta": "2026-11-30", "factor": 0.75 }]
   },
   "feriados": [],
   "observaciones": [
-    "Ítem 1 al 0,75: dotación de 3 capitanes. Adicionales 1a, 1b y 1c no prestados en el período."
+    "Inicio del contrato: 26/10/2026. Ítem 1 al 0,75: dotación de 3 capitanes. Adicionales 1a, 1b y 1c no prestados en el período."
   ]
 }

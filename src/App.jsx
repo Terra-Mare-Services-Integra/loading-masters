@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import logoUrl from '../assets/isologo-horizontal-azul.png';
 import { CONTRATO_VMOS } from './lib/contrato.js';
 import { periodoDeCierre } from './lib/certificacion.js';
-import { rangoDias, parse } from './lib/fechas.js';
+import { rangoDias, parse, sumarDias, esHabil } from './lib/fechas.js';
 import { supabase, DOMINIOS } from './lib/supabase.js';
 import { armarProforma, comprimirTramos, expandirTramos } from './proforma/armar.js';
 import { renderProforma } from './proforma/plantilla.js';
@@ -10,25 +10,32 @@ import * as db from './datos.js';
 
 const MENSUALES = CONTRATO_VMOS.items.filter((i) => i.tipo === 'mensual');
 const DOW = ['D', 'L', 'M', 'M', 'J', 'V', 'S'];
+const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
 const ars = new Intl.NumberFormat('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const num = new Intl.NumberFormat('es-AR', { maximumFractionDigits: 4 });
 const hora = new Intl.DateTimeFormat('es-AR', { dateStyle: 'short', timeStyle: 'short' });
 const pesos = (x) => `$ ${ars.format(x)}`;
 const fecha = (iso) => iso.split('-').reverse().join('/');
 const lineas = (texto) => texto.split('\n').map((s) => s.trim()).filter(Boolean);
+const finDeMes = (iso) => {
+  const d = parse(iso);
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).toISOString().slice(0, 10);
+};
 
-// Mes de cierre por defecto: el del próximo día 20.
-function cierrePorDefecto(hoy = new Date()) {
-  const d = new Date(hoy.getFullYear(), hoy.getMonth() + (hoy.getDate() > 20 ? 1 : 0), 1);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-}
+const proximoHabil = (iso) => (esHabil(iso) ? iso : proximoHabil(sumarDias(iso, 1)));
 
-function cargaVacia(cierre) {
+// Propuesta para una facturación nueva: arranca el día siguiente a la última y llega a fin de ese mes.
+function propuestaNueva(ultima) {
+  const desde = ultima ? sumarDias(ultima.hasta, 1) : new Date().toISOString().slice(0, 10);
+  const hasta = finDeMes(desde);
+  const mes = parse(hasta).getUTCMonth();
   return {
-    id: null,
-    cierre,
-    numero: `PF-${cierre}`,
-    fechaEmision: periodoDeCierre(cierre).hasta,
+    nombre: `Facturar ${MESES[mes]}`,
+    desde,
+    hasta,
+    numero: `PF-${hasta.slice(0, 7)}`,
+    fechaProforma: proximoHabil(hasta.slice(0, 8) + '20'), // día 20 del mes, o el hábil siguiente
+    fechaFactura: '',
     factores: {},
     reembolsables: { '1d': 0 },
     observaciones: '',
@@ -37,23 +44,28 @@ function cargaVacia(cierre) {
 
 // El JSON de archivo usa tramos (igual que certificaciones/*.json); la app trabaja por día.
 function aArchivo(carga, feriados) {
-  const periodo = periodoDeCierre(carga.cierre);
-  const { cierre, numero, fechaEmision, factores, reembolsables, observaciones } = carga;
+  const { nombre, desde, hasta, numero, fechaProforma, fechaFactura, factores, reembolsables, observaciones } = carga;
   const tramos = Object.fromEntries(
-    Object.entries(factores).map(([c, f]) => [c, comprimirTramos(f, periodo)]).filter(([, t]) => t.length),
+    Object.entries(factores).map(([c, f]) => [c, comprimirTramos(f, { desde, hasta })]).filter(([, t]) => t.length),
   );
-  return { cierre, numero, fechaEmision, tramos, reembolsables, feriados, observaciones: lineas(observaciones) };
+  return {
+    nombre, desde, hasta, numero, fechaProforma, ...(fechaFactura ? { fechaFactura } : {}),
+    tramos, reembolsables, feriados, observaciones: lineas(observaciones),
+  };
 }
 function desdeArchivo(json, actual) {
-  const { cierre, numero, fechaEmision, tramos = {}, reembolsables, observaciones = [] } = json;
+  const periodo = json.desde ? { desde: json.desde, hasta: json.hasta } : json.cierre ? periodoDeCierre(json.cierre) : actual;
   return {
     ...actual,
-    cierre,
-    numero: numero ?? actual.numero,
-    fechaEmision: fechaEmision ?? actual.fechaEmision,
-    reembolsables: reembolsables ?? actual.reembolsables,
-    factores: Object.fromEntries(Object.entries(tramos).map(([c, t]) => [c, expandirTramos(t)])),
-    observaciones: observaciones.join('\n'),
+    nombre: json.nombre ?? actual.nombre,
+    desde: periodo.desde,
+    hasta: periodo.hasta,
+    numero: json.numero ?? actual.numero,
+    fechaProforma: json.fechaProforma ?? json.fechaEmision ?? actual.fechaProforma,
+    fechaFactura: json.fechaFactura ?? '',
+    reembolsables: json.reembolsables ?? actual.reembolsables,
+    factores: Object.fromEntries(Object.entries(json.tramos ?? {}).map(([c, t]) => [c, expandirTramos(t)])),
+    observaciones: (json.observaciones ?? []).join('\n'),
   };
 }
 
@@ -135,73 +147,135 @@ function Ingreso() {
 }
 
 function Certificacion() {
-  const [carga, setCarga] = useState(() => cargaVacia(cierrePorDefecto()));
+  const [lista, setLista] = useState(null);
+  const [seleccion, setSeleccion] = useState(null);
+  const [nueva, setNueva] = useState(null);
+  const [error, setError] = useState('');
+
+  async function recargarLista(elegir) {
+    const filas = await db.listarFacturaciones();
+    setLista(filas);
+    setSeleccion((actual) => elegir ?? actual ?? filas[0]?.id ?? null);
+    if (!filas.length) setNueva(propuestaNueva(null));
+  }
+
+  useEffect(() => {
+    recargarLista().catch((e) => setError(e.message));
+  }, []);
+
+  async function crear(datos) {
+    try {
+      const creada = await db.crearFacturacion(datos, 0);
+      setNueva(null);
+      await recargarLista(creada.id);
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  if (lista === null) return <main>{error ? <p className="aviso error">Error: {error}</p> : 'Cargando…'}</main>;
+
+  return (
+    <main>
+      <section className="facturaciones">
+        <div className="overline">Facturaciones</div>
+        <div className="fila">
+          {lista.map((f) => (
+            <button key={f.id} type="button" className={`pestana ${f.id === seleccion && !nueva ? 'activa' : ''}`}
+              onClick={() => { setNueva(null); setSeleccion(f.id); }}>
+              <span>{f.nombre}</span>
+              <span className="mono">{fecha(f.desde)} – {fecha(f.hasta)}</span>
+            </button>
+          ))}
+          <button type="button" className="secundario" onClick={() => setNueva(propuestaNueva(lista[0]))}>+ Nueva facturación</button>
+        </div>
+        {error && <p className="aviso error">Error: {error}</p>}
+      </section>
+
+      {nueva
+        ? <NuevaFacturacion inicial={nueva} onCrear={crear} onCancelar={lista.length ? () => setNueva(null) : null} />
+        : seleccion && <Facturacion key={seleccion} id={seleccion} onCambioResumen={() => recargarLista()} />}
+    </main>
+  );
+}
+
+function NuevaFacturacion({ inicial, onCrear, onCancelar }) {
+  const [d, setD] = useState(inicial);
+  const set = (c) => setD((x) => ({ ...x, ...c }));
+  const valido = d.nombre.trim() && d.desde && d.hasta && d.hasta >= d.desde && d.fechaProforma;
+  return (
+    <section className="tarjeta nueva">
+      <div className="overline">Nueva facturación</div>
+      <div className="campos">
+        <label className="ancho">Nombre<input value={d.nombre} onChange={(e) => set({ nombre: e.target.value })} /></label>
+        <label>Inicio<input type="date" value={d.desde} onChange={(e) => set({ desde: e.target.value })} /></label>
+        <label>Fin<input type="date" value={d.hasta} onChange={(e) => set({ hasta: e.target.value })} /></label>
+        <label>Envío de proforma<input type="date" value={d.fechaProforma} onChange={(e) => set({ fechaProforma: e.target.value })} /></label>
+        <label>Número<input value={d.numero} onChange={(e) => set({ numero: e.target.value })} /></label>
+      </div>
+      <p className="aviso">La factura se calcula a los {CONTRATO_VMOS.plazos.diasHabilesRevisionProforma} días hábiles del envío de la proforma y el vencimiento a los {CONTRATO_VMOS.plazos.diasPagoFactura} días de la factura; se pueden ajustar después.</p>
+      <div className="fila">
+        <button type="button" disabled={!valido} onClick={() => onCrear({ ...d, nombre: d.nombre.trim() })}>Crear</button>
+        {onCancelar && <button type="button" className="terciario" onClick={onCancelar}>Cancelar</button>}
+      </div>
+    </section>
+  );
+}
+
+function Facturacion({ id, onCambioResumen }) {
+  const [carga, setCarga] = useState(null);
   const [feriados, setFeriados] = useState([]);
   const [proformas, setProformas] = useState([]);
   // estado del guardado: cargando | guardado | pendiente | guardando | error
   const [estado, setEstado] = useState({ tipo: 'cargando' });
   const cambiosSinGuardar = useRef(false);
 
-  const periodo = useMemo(() => periodoDeCierre(carga.cierre), [carga.cierre]);
-  const dias = useMemo(() => rangoDias(periodo.desde, periodo.hasta), [periodo]);
-  const proforma = useMemo(
-    () => armarProforma({ ...carga, feriados, observaciones: lineas(carga.observaciones) }),
-    [carga, feriados],
-  );
-
   useEffect(() => {
-    db.leerFeriados().then(setFeriados).catch((e) => setEstado({ tipo: 'error', texto: e.message }));
-  }, []);
-
-  // Al cambiar de mes se lee la certificación guardada (o se arranca vacía).
-  useEffect(() => {
-    let vigente = true;
-    setEstado({ tipo: 'cargando' });
-    db.leerCertificacion(carga.cierre)
-      .then(async (guardada) => {
-        if (!vigente) return;
-        cambiosSinGuardar.current = false;
-        if (guardada) {
-          setCarga({ ...cargaVacia(guardada.cierre), ...guardada });
-          setProformas(await db.leerProformas(guardada.id));
-          setEstado({ tipo: 'guardado', ...guardada.actualizado });
-        } else {
-          setCarga((c) => (c.cierre === carga.cierre && !c.id ? c : cargaVacia(carga.cierre)));
-          setProformas([]);
-          setEstado({ tipo: 'nuevo' });
-        }
+    Promise.all([db.leerFacturacion(id), db.leerFeriados(), db.leerProformas(id)])
+      .then(([f, fer, pfs]) => {
+        setCarga(f);
+        setFeriados(fer);
+        setProformas(pfs);
+        setEstado({ tipo: 'guardado', ...f.actualizado });
       })
-      .catch((e) => vigente && setEstado({ tipo: 'error', texto: e.message }));
-    return () => { vigente = false; };
-  }, [carga.cierre]);
+      .catch((e) => setEstado({ tipo: 'error', texto: e.message }));
+  }, [id]);
+
+  const periodo = useMemo(() => carga && { desde: carga.desde, hasta: carga.hasta }, [carga?.desde, carga?.hasta]);
+  const periodoValido = periodo && periodo.desde && periodo.hasta && periodo.hasta >= periodo.desde;
+  const dias = useMemo(() => (periodoValido ? rangoDias(periodo.desde, periodo.hasta) : []), [periodo, periodoValido]);
+  const proforma = useMemo(
+    () => carga && periodoValido && carga.fechaProforma
+      ? armarProforma({ ...carga, feriados, observaciones: lineas(carga.observaciones) })
+      : null,
+    [carga, feriados, periodoValido],
+  );
 
   // Guardado automático, 800 ms después del último cambio.
   useEffect(() => {
-    if (!cambiosSinGuardar.current) return;
+    if (!cambiosSinGuardar.current || !proforma) return;
     setEstado({ tipo: 'pendiente' });
     const t = setTimeout(async () => {
       setEstado({ tipo: 'guardando' });
       try {
-        const r = await db.guardarCertificacion(carga, proforma.subtotal);
+        const actualizado = await db.guardarFacturacion(carga, proforma.subtotal);
         cambiosSinGuardar.current = false;
-        setCarga((c) => (c.id ? c : { ...c, id: r.id }));
-        setEstado({ tipo: 'guardado', ...r.actualizado });
+        setEstado({ tipo: 'guardado', ...actualizado });
+        onCambioResumen();
       } catch (e) {
         setEstado({ tipo: 'error', texto: e.message });
       }
     }, 800);
     return () => clearTimeout(t);
-  }, [carga, proforma.subtotal]);
+  }, [carga, proforma?.subtotal]);
+
+  if (!carga) return <EstadoGuardado estado={estado} />;
 
   const editar = (cambio) => {
     cambiosSinGuardar.current = true;
     setCarga(cambio);
   };
   const set = (cambios) => editar((c) => ({ ...c, ...cambios }));
-
-  function cambiarMes(cierre) {
-    if (/^\d{4}-\d{2}$/.test(cierre)) setCarga(cargaVacia(cierre));
-  }
 
   function setFactor(codigo, dia, valor) {
     editar((c) => {
@@ -212,10 +286,10 @@ function Certificacion() {
     });
   }
 
-  async function cambiarFeriado(fecha, agregar) {
+  async function cambiarFeriado(f, agregar) {
     try {
-      if (agregar) await db.agregarFeriado(fecha);
-      else await db.quitarFeriado(fecha);
+      if (agregar) await db.agregarFeriado(f);
+      else await db.quitarFeriado(f);
       setFeriados(await db.leerFeriados());
     } catch (e) {
       setEstado({ tipo: 'error', texto: e.message });
@@ -224,66 +298,83 @@ function Certificacion() {
 
   // Se registra la emisión (foto de la proforma) antes de imprimir.
   async function emitir() {
-    const guardada = await db.guardarCertificacion(carga, proforma.subtotal);
+    const actualizado = await db.guardarFacturacion(carga, proforma.subtotal);
     cambiosSinGuardar.current = false;
-    setCarga((c) => ({ ...c, id: guardada.id }));
-    const emitida = await db.registrarProforma(guardada.id, proforma);
+    setEstado({ tipo: 'guardado', ...actualizado });
+    const emitida = await db.registrarProforma(carga.id, proforma);
     setProformas((ps) => [emitida, ...ps]);
     imprimir(emitida.datos);
   }
 
   return (
-    <main>
+    <>
       <section className="encabezado">
         <div>
-          <h1>Certificación de servicios.</h1>
-          <div className="periodo mono">{fecha(periodo.desde)} – {fecha(periodo.hasta)} · {dias.length} días</div>
+          <h1>{carga.nombre || 'Sin nombre'}.</h1>
+          {periodoValido && <div className="periodo mono">{fecha(periodo.desde)} – {fecha(periodo.hasta)} · {dias.length} días</div>}
           <div className="filete" />
         </div>
-        <div className="campos">
-          <label>Mes de cierre
-            <input type="month" value={carga.cierre} onChange={(e) => cambiarMes(e.target.value)} />
-          </label>
-          <label>Número
-            <input value={carga.numero} onChange={(e) => set({ numero: e.target.value })} />
-          </label>
-          <label>Emisión
-            <input type="date" value={carga.fechaEmision} onChange={(e) => set({ fechaEmision: e.target.value })} />
-          </label>
-          <EstadoGuardado estado={estado} />
-        </div>
+        <EstadoGuardado estado={estado} />
       </section>
 
-      <fieldset disabled={estado.tipo === 'cargando'} className="contenido">
-        <Rellenar periodo={periodo} onAplicar={(codigo, desde, hasta, factor) => {
-          for (const d of rangoDias(desde, hasta)) setFactor(codigo, d, factor);
-        }} />
-
-        <Grilla dias={dias} carga={carga} feriados={feriados} proforma={proforma} setFactor={setFactor} />
-
-        <div className="columnas">
-          <section className="tarjeta">
-            <div className="overline">Otros datos</div>
-            <label>Reembolsables ítem 1d (gastos, sin fee)
-              <input type="number" min="0" step="0.01" value={carga.reembolsables['1d'] || ''}
-                onChange={(e) => set({ reembolsables: { '1d': Number(e.target.value) || 0 } })} />
-            </label>
-            <Feriados feriados={feriados} periodo={periodo} onCambiar={cambiarFeriado} />
-            <label>Observaciones (una por línea, salen en la proforma)
-              <textarea rows={3} value={carga.observaciones} onChange={(e) => set({ observaciones: e.target.value })} />
-            </label>
-          </section>
-
-          <Resumen proforma={proforma} />
+      <section className="tarjeta fechas">
+        <div className="campos">
+          <label className="ancho">Nombre<input value={carga.nombre} onChange={(e) => set({ nombre: e.target.value })} /></label>
+          <label>Número de proforma<input value={carga.numero} onChange={(e) => set({ numero: e.target.value })} /></label>
         </div>
+        <div className="campos">
+          <label>Inicio<input type="date" value={carga.desde} onChange={(e) => set({ desde: e.target.value })} /></label>
+          <label>Fin<input type="date" value={carga.hasta} onChange={(e) => set({ hasta: e.target.value })} /></label>
+          <label>Envío de proforma<input type="date" value={carga.fechaProforma} onChange={(e) => set({ fechaProforma: e.target.value })} /></label>
+          <label>Fin observaciones VMOS
+            <input type="date" value={proforma?.calendario.finRevision ?? ''} readOnly tabIndex={-1} className="calculado" />
+          </label>
+          <label>Factura {carga.fechaFactura ? '(manual)' : `(+${CONTRATO_VMOS.plazos.diasHabilesRevisionProforma} días hábiles)`}
+            <input type="date" value={carga.fechaFactura || proforma?.calendario.factura || ''}
+              onChange={(e) => set({ fechaFactura: e.target.value })} />
+          </label>
+          {carga.fechaFactura && (
+            <button type="button" className="terciario" onClick={() => set({ fechaFactura: '' })}>Volver a automática</button>
+          )}
+          <label>Vencimiento de pago
+            <input type="date" value={proforma?.calendario.vencimientoPago ?? ''} readOnly tabIndex={-1} className="calculado" />
+          </label>
+        </div>
+        {!periodoValido && <p className="aviso error">El fin tiene que ser igual o posterior al inicio.</p>}
+      </section>
 
-        <Acciones carga={carga} feriados={feriados} onEmitir={emitir}
-          onImportar={(json) => editar((c) => desdeArchivo(json, c))}
-          onLimpiar={() => editar((c) => ({ ...cargaVacia(c.cierre), id: c.id }))} />
+      {periodoValido && proforma && (
+        <>
+          <Rellenar periodo={periodo} onAplicar={(codigo, desde, hasta, factor) => {
+            for (const d of rangoDias(desde, hasta)) setFactor(codigo, d, factor);
+          }} />
 
-        <Historial proformas={proformas} />
-      </fieldset>
-    </main>
+          <Grilla dias={dias} carga={carga} feriados={feriados} proforma={proforma} setFactor={setFactor} />
+
+          <div className="columnas">
+            <section className="tarjeta">
+              <div className="overline">Otros datos</div>
+              <label>Reembolsables ítem 1d (gastos, sin fee)
+                <input type="number" min="0" step="0.01" value={carga.reembolsables['1d'] || ''}
+                  onChange={(e) => set({ reembolsables: { '1d': Number(e.target.value) || 0 } })} />
+              </label>
+              <Feriados feriados={feriados} periodo={periodo} onCambiar={cambiarFeriado} />
+              <label>Observaciones (una por línea, salen en la proforma)
+                <textarea rows={3} value={carga.observaciones} onChange={(e) => set({ observaciones: e.target.value })} />
+              </label>
+            </section>
+
+            <Resumen proforma={proforma} />
+          </div>
+
+          <Acciones carga={carga} feriados={feriados} onEmitir={emitir}
+            onImportar={(json) => editar((c) => desdeArchivo(json, c))}
+            onLimpiar={() => editar((c) => ({ ...c, factores: {}, reembolsables: { '1d': 0 }, observaciones: '' }))} />
+
+          <Historial proformas={proformas} />
+        </>
+      )}
+    </>
   );
 }
 
@@ -360,7 +451,7 @@ function Grilla({ dias, carga, feriados, proforma, setFactor }) {
                 <th key={d} className={libre ? 'libre' : ''} title={fecha(d)}>
                   <div className="dow">{DOW[dow]}</div>
                   <div className="mono">{d.slice(8)}</div>
-                  {d.endsWith('-21') || d.endsWith('-01') ? <div className="mes">{d.slice(5, 7)}</div> : <div className="mes">&nbsp;</div>}
+                  {d === dias[0] || d.endsWith('-01') ? <div className="mes">{MESES[parse(d).getUTCMonth()].slice(0, 3)}</div> : <div className="mes">&nbsp;</div>}
                 </th>
               );
             })}
@@ -497,7 +588,7 @@ function Acciones({ carga, feriados, onEmitir, onImportar, onLimpiar }) {
     const blob = new Blob([JSON.stringify(aArchivo(carga, feriados), null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `${carga.cierre}.json`;
+    a.download = `${carga.numero || carga.nombre}.json`;
     a.click();
     URL.revokeObjectURL(a.href);
   }
@@ -508,7 +599,8 @@ function Acciones({ carga, feriados, onEmitir, onImportar, onLimpiar }) {
     if (!f) return;
     try {
       const json = JSON.parse(await f.text());
-      if (json.cierre !== carga.cierre) throw new Error(`es del cierre ${json.cierre}; elegí ese mes antes de importar`);
+      if (!json.desde && !json.cierre) throw new Error('falta "desde"/"hasta"');
+      if (!confirm(`¿Reemplazar la carga de "${carga.nombre}" con ${f.name}?`)) return;
       onImportar(json);
       setAviso(`Importado ${f.name}.`);
     } catch (err) {
@@ -522,7 +614,7 @@ function Acciones({ carga, feriados, onEmitir, onImportar, onLimpiar }) {
       <button type="button" className="secundario" onClick={descargarJson}>Descargar JSON</button>
       <button type="button" className="secundario" onClick={() => archivo.current.click()}>Importar JSON</button>
       <input ref={archivo} type="file" accept="application/json,.json" hidden onChange={importar} />
-      <button type="button" className="terciario" onClick={() => { if (confirm('¿Borrar la carga de este mes?')) onLimpiar(); }}>Limpiar mes</button>
+      <button type="button" className="terciario" onClick={() => { if (confirm('¿Borrar los factores, reembolsables y observaciones de esta facturación?')) onLimpiar(); }}>Limpiar carga</button>
       {aviso && <span className="aviso">{aviso}</span>}
     </section>
   );

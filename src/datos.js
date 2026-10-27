@@ -1,4 +1,4 @@
-// Acceso a Supabase: certificaciones (una por mes de cierre), feriados y proformas emitidas.
+// Acceso a Supabase: facturaciones (tabla certificaciones), feriados y proformas emitidas.
 import { supabase } from './lib/supabase.js';
 
 const ok = ({ data, error }) => {
@@ -6,41 +6,53 @@ const ok = ({ data, error }) => {
   return data;
 };
 
-export async function leerCertificacion(cierre) {
-  const fila = ok(await supabase.from('certificaciones').select('*').eq('cierre', cierre).maybeSingle());
-  if (!fila) return null;
-  return {
-    id: fila.id,
-    cierre: fila.cierre,
-    numero: fila.numero,
-    fechaEmision: fila.fecha_emision,
-    factores: fila.factores,
-    reembolsables: fila.reembolsables,
-    observaciones: fila.observaciones,
-    actualizado: { at: fila.updated_at, por: fila.updated_by },
-  };
+const desdeFila = (fila) => ({
+  id: fila.id,
+  nombre: fila.nombre,
+  desde: fila.desde,
+  hasta: fila.hasta,
+  numero: fila.numero,
+  fechaProforma: fila.fecha_proforma,
+  fechaFactura: fila.fecha_factura ?? '',
+  factores: fila.factores,
+  reembolsables: fila.reembolsables,
+  observaciones: fila.observaciones,
+  actualizado: { at: fila.updated_at, por: fila.updated_by },
+});
+
+const aFila = (carga, total) => ({
+  nombre: carga.nombre,
+  desde: carga.desde,
+  hasta: carga.hasta,
+  numero: carga.numero,
+  fecha_proforma: carga.fechaProforma,
+  fecha_factura: carga.fechaFactura || null,
+  factores: carga.factores,
+  reembolsables: carga.reembolsables,
+  observaciones: carga.observaciones,
+  total,
+});
+
+export async function listarFacturaciones() {
+  return ok(
+    await supabase.from('certificaciones').select('id, nombre, desde, hasta, total').order('desde', { ascending: false }),
+  );
 }
 
-export async function guardarCertificacion(carga, total) {
+export async function leerFacturacion(id) {
+  return desdeFila(ok(await supabase.from('certificaciones').select('*').eq('id', id).single()));
+}
+
+export async function crearFacturacion(carga, total) {
+  return desdeFila(ok(await supabase.from('certificaciones').insert(aFila(carga, total)).select('*').single()));
+}
+
+export async function guardarFacturacion(carga, total) {
   const fila = ok(
-    await supabase
-      .from('certificaciones')
-      .upsert(
-        {
-          cierre: carga.cierre,
-          numero: carga.numero,
-          fecha_emision: carga.fechaEmision,
-          factores: carga.factores,
-          reembolsables: carga.reembolsables,
-          observaciones: carga.observaciones,
-          total,
-        },
-        { onConflict: 'cierre' },
-      )
-      .select('id, updated_at, updated_by')
-      .single(),
+    await supabase.from('certificaciones').update(aFila(carga, total)).eq('id', carga.id)
+      .select('updated_at, updated_by').single(),
   );
-  return { id: fila.id, actualizado: { at: fila.updated_at, por: fila.updated_by } };
+  return { at: fila.updated_at, por: fila.updated_by };
 }
 
 export async function leerFeriados() {

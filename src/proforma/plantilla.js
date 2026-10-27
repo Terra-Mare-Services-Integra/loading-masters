@@ -7,6 +7,7 @@ import { parse } from '../lib/fechas.js';
 const ars = new Intl.NumberFormat('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const num = new Intl.NumberFormat('es-AR', { maximumFractionDigits: 4 });
 const dec2 = new Intl.NumberFormat('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const dec4 = new Intl.NumberFormat('es-AR', { minimumFractionDigits: 4, maximumFractionDigits: 4 });
 const DIAS = ['dom', 'lun', 'mar', 'mié', 'jue', 'vie', 'sáb'];
 
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
@@ -80,7 +81,8 @@ tr.inactivo td.cod{ color:var(--tm-blue-light); }
 .notas{ margin-top:6mm; font-size:8pt; color:var(--text-muted); }
 .notas p{ margin:0 0 1.5mm; }
 
-table.diario td, table.diario th{ padding-top:.9mm; padding-bottom:.9mm; }
+table.diario td, table.diario th{ padding-top:.5mm; padding-bottom:.5mm; }
+table.diario tbody td{ line-height:1.35; }
 table.diario td{ font-size:8pt; }
 table.diario td.f{ font-family:var(--font-mono); white-space:nowrap; }
 table.diario td.dow{ color:var(--text-muted); width:10mm; }
@@ -103,8 +105,8 @@ function filaItem(it) {
     <td class="cod">${esc(it.codigo)}</td>
     <td class="desc">${esc(it.descripcion)}</td>
     <td class="n">${pesos(it.precioMensual)}</td>
-    <td class="n">${pesos(it.costoDiario)}</td>
     <td class="n">${num.format(it.diasEquivalentes)}</td>
+    <td class="n">${dec4.format(it.mesesEquivalentes)}</td>
     <td class="n fuerte">${pesos(it.importe)}</td></tr>`;
 }
 
@@ -122,7 +124,7 @@ function tablaDiaria(cert) {
     <thead><tr><th>Fecha</th><th></th>${mensuales.map((i) => `<th class="n">Ítem ${esc(i.codigo)}</th>`).join('')}</tr></thead>
     <tbody>${filas}</tbody>
     <tfoot><tr><td colspan="2">Días equivalentes</td>${mensuales.map((i) => `<td class="n">${num.format(i.diasEquivalentes)}</td>`).join('')}</tr>
-    <tr><td colspan="2">Fracción del mes</td>${mensuales.map((i) => `<td class="n">${pct(i.fraccionMes)}</td>`).join('')}</tr></tfoot>
+    <tr><td colspan="2">Meses equivalentes</td>${mensuales.map((i) => `<td class="n">${dec4.format(i.mesesEquivalentes)}</td>`).join('')}</tr></tfoot>
   </table>`;
 }
 
@@ -155,7 +157,7 @@ export function renderProforma(p, { logo, pie = false } = {}) {
   </div>
 </header>
 
-<h1>Certificación de servicios.</h1>
+<h1>${p.nombre ? esc(p.nombre) : 'Certificación de servicios'}.</h1>
 <div class="periodo">${fecha(cert.periodo.desde)} – ${fecha(cert.periodo.hasta)}</div>
 <div class="filete"></div>
 <p class="lead">${esc(p.referencia)}.</p>
@@ -180,7 +182,7 @@ export function renderProforma(p, { logo, pie = false } = {}) {
 <section>
   <div class="overline">Resumen</div>
   <table>
-    <thead><tr><th>Ítem</th><th>Descripción</th><th class="n">Precio mensual</th><th class="n">Costo diario</th><th class="n">Días equiv.</th><th class="n">Importe</th></tr></thead>
+    <thead><tr><th>Ítem</th><th>Descripción</th><th class="n">Precio mensual</th><th class="n">Días equiv.</th><th class="n">Meses equiv.</th><th class="n">Importe</th></tr></thead>
     <tbody>${cert.items.map(filaItem).join('')}</tbody>
   </table>
   <div class="totales">
@@ -194,7 +196,7 @@ export function renderProforma(p, { logo, pie = false } = {}) {
   <div class="overline">Circuito de aprobación y cobro</div>
   <div class="circuito">
     <div class="paso"><div class="cuando">${fecha(cal.envioProforma)}</div><div class="que">Envío de proforma</div></div>
-    <div class="paso"><div class="cuando">${fecha(cal.finRevision)}</div><div class="que">Fin del plazo de observaciones (${diasHabiles} días hábiles)</div></div>
+    <div class="paso"><div class="cuando">${fecha(cal.finRevision)}</div><div class="que">Fin del plazo de observaciones de VMOS (${diasHabiles} días hábiles)</div></div>
     <div class="paso"><div class="cuando">${fecha(cal.factura)}</div><div class="que">Emisión de factura</div></div>
     <div class="paso"><div class="cuando">${fecha(cal.vencimientoPago)}</div><div class="que">Vencimiento de pago (${diasPago} días)</div></div>
   </div>
@@ -205,7 +207,7 @@ export function renderProforma(p, { logo, pie = false } = {}) {
 <div class="filete"></div>
 <p class="lead">Factor diario por ítem certificado, ${fecha(cert.periodo.desde)} al ${fecha(cert.periodo.hasta)}.</p>
 <div class="notas">
-  <p>Costo diario = precio mensual / ${cert.divisor} días del período. Factor diario 1 = servicio completo; las fracciones reflejan la dotación efectivamente afectada.
+  <p>Costo diario = precio mensual / ${cert.divisor ? `${cert.divisor} días` : 'días del mes calendario'}; meses equivalentes = Σ factor diario / días del mes. Factor diario 1 = servicio completo; las fracciones reflejan la dotación efectivamente afectada.
   Precios en ${esc(p.moneda)}, sin IVA, según tarifario de la Oferta.</p>
   ${p.observaciones.map((o) => `<p>${esc(o)}</p>`).join('')}
 </div>

@@ -7,16 +7,19 @@ offshore de Punta Colorada (Oferta 1/2026):
 certificación diaria → proforma (PDF) → presupuesto en Xubio → 5 días hábiles de revisión VMOS → factura → cobro a 30 días
 ```
 
-Ejemplo, cierre de noviembre 2026: período 21/10 – 20/11, proforma el viernes 20/11,
-revisión hasta el 27/11, factura el 30/11, vencimiento de pago el 30/12
-(sin contar feriados; ver `calendarioCobro`).
+Cada **facturación** es un subproyecto con nombre y fechas propias. Ejemplo, "Facturar
+noviembre": servicio del 26/10 (inicio del contrato) al 30/11, proforma el viernes 20/11, fin de
+observaciones de VMOS y factura el 27/11 (5 días hábiles), vencimiento de pago el 27/12
+(sin contar feriados; ver `calendarioCobro`). La fecha de factura se puede fijar a mano.
 
 ## Reglas de cálculo
 
 - **Precios** (ARS, sin IVA, base oct-2026) en [`src/lib/contrato.js`](src/lib/contrato.js), tomados del
   tarifario de la carta oferta firmada.
-- **Costo diario** = precio mensual / días del período. El período 21/10–20/11 tiene 31 días, igual
-  que el divisor fijo del Excel `Certificación.xlsx`.
+- **Costo diario** = precio mensual / días del mes calendario de cada fecha, así un período puede
+  abarcar varios meses y un mes completo al 1 vale exactamente el precio mensual. Importe =
+  precio mensual × meses equivalentes (Σ factor diario / días del mes). El Excel original dividía
+  siempre por 31; `certificar({ divisor: 31 })` reproduce ese criterio.
 - **Factor diario por ítem**: 1 = servicio completo; hoy el ítem 1 va al **0,75** (3 capitanes) y los
   adicionales 1a, 1b y 1c en 0.
 - **Ítem 1d** (reembolsables): costo × 1,10.
@@ -39,8 +42,10 @@ npm install
 npm run dev
 ```
 
-- **Mes de cierre**: elige el período (21 del mes anterior al 20). Número y fecha de emisión se
-  completan solos y se pueden editar.
+- **Facturaciones**: una pestaña por facturación ("Facturar noviembre"…). *Nueva facturación*
+  propone arrancar el día siguiente a la última, terminar a fin de ese mes y enviar la proforma el
+  20 (o el hábil siguiente). Nombre, inicio, fin, número y fechas se editan en la ficha; fin de
+  observaciones, factura (+5 días hábiles, o manual) y vencimiento (+30 días) se calculan.
 - **Completar un tramo**: ítem + desde/hasta + factor, para cargar muchos días de una vez.
 - **Grilla**: un casillero por día e ítem, como el Excel. Acepta coma o punto, entre 0 y 1;
   fines de semana y feriados sombreados.
@@ -56,7 +61,8 @@ Requiere `.env.local` con `VITE_SUPABASE_URL` y `VITE_SUPABASE_ANON_KEY` (ver `.
 Proyecto propio `loading-masters` (ref `sehlulimgrxdterocaml`, sa-east-1, org Integra). Esquema en
 `supabase/migrations/`, configuración de auth en `supabase/config.toml`.
 
-- `certificaciones`: una por mes de cierre; la app guarda sola 0,8 s después de cada cambio.
+- `certificaciones`: una por facturación (nombre, desde, hasta, fecha de proforma y de factura);
+  la app guarda sola 0,8 s después de cada cambio.
 - `feriados`: compartidos entre meses.
 - `proformas`: cada emisión guarda la foto exacta de lo enviado; no se editan ni se borran, y se
   pueden reimprimir desde el historial.
@@ -79,8 +85,9 @@ Conectado al repo: cada push a `main` despliega a producción y cada rama genera
 
 ## Emitir la proforma por línea de comandos
 
-1. Copiar `certificaciones/2026-11.json` como `certificaciones/AAAA-MM.json` (mes de cierre) y cargar
-   los tramos de cada ítem: `{ "desde", "hasta", "factor" }`. Los días sin tramo cuentan 0.
+1. Copiar `certificaciones/2026-11.json` y ajustar `nombre`, `desde`, `hasta`, `fechaProforma`
+   (opcional `fechaFactura`) y los tramos de cada ítem: `{ "desde", "hasta", "factor" }`. Los días
+   sin tramo cuentan 0.
 2. Generar el PDF (usa el Chrome o Edge instalado; `CHROME_PATH` para otro):
 
 ```bash

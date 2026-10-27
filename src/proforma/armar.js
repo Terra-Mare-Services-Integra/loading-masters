@@ -35,12 +35,16 @@ export function comprimirTramos(porFecha, periodo) {
 }
 
 /**
- * Arma los datos de una proforma a partir de la carga de certificación de un mes.
+ * Arma los datos de una proforma a partir de la carga de una facturación.
  *
  * @param {object} carga
- * @param {string} carga.cierre Mes de cierre 'YYYY-MM' (período del 21 anterior al 20).
+ * @param {string} [carga.nombre] Nombre de la facturación ("Facturar noviembre").
+ * @param {string} [carga.desde] Inicio del período certificado.
+ * @param {string} [carga.hasta] Fin del período certificado.
+ * @param {string} [carga.cierre] Alternativa a desde/hasta: mes 'YYYY-MM' (21 del anterior al 20).
  * @param {string} carga.numero Número de proforma.
- * @param {string} carga.fechaEmision
+ * @param {string} [carga.fechaProforma] Envío de la proforma (por defecto, `hasta`).
+ * @param {string} [carga.fechaFactura] Fecha de factura fijada a mano (por defecto, proforma + 5 días hábiles).
  * @param {Record<string, {desde: string, hasta: string, factor: number}[]>} [carga.tramos]
  * @param {Record<string, Record<string, number>>} [carga.factores] Alternativa a tramos: factor por fecha.
  * @param {Record<string, number>} [carga.reembolsables]
@@ -48,15 +52,17 @@ export function comprimirTramos(porFecha, periodo) {
  * @param {number} [carga.iva] Alícuota de IVA (0,21 por defecto).
  */
 export function armarProforma(carga, contrato = CONTRATO_VMOS) {
-  const periodo = periodoDeCierre(carga.cierre, contrato);
+  const periodo = carga.desde ? { desde: carga.desde, hasta: carga.hasta } : periodoDeCierre(carga.cierre, contrato);
   const factores = carga.factores ?? Object.fromEntries(Object.entries(carga.tramos ?? {}).map(([c, t]) => [c, expandirTramos(t)]));
   const cert = certificar({ periodo, factores, reembolsables: carga.reembolsables, precios: carga.precios }, contrato);
   const iva = carga.iva ?? 0.21;
   const ivaImporte = Math.round(cert.total * iva * 100) / 100;
+  const fechaProforma = carga.fechaProforma ?? carga.fechaEmision ?? periodo.hasta;
 
   return {
+    nombre: carga.nombre ?? null,
     numero: carga.numero,
-    fechaEmision: carga.fechaEmision ?? periodo.hasta,
+    fechaEmision: fechaProforma,
     emisor: EMISOR,
     cliente: CLIENTE_VMOS,
     referencia: `Oferta ${contrato.oferta} — Servicio de Capitán Operativo y Carga (CO&C), Terminal offshore Punta Colorada`,
@@ -66,7 +72,7 @@ export function armarProforma(carga, contrato = CONTRATO_VMOS) {
     iva,
     ivaImporte,
     total: Math.round((cert.total + ivaImporte) * 100) / 100,
-    calendario: calendarioCobro(periodo, { feriados: carga.feriados ?? [] }, contrato),
+    calendario: calendarioCobro(fechaProforma, { feriados: carga.feriados ?? [], factura: carga.fechaFactura || undefined }, contrato),
     plazos: contrato.plazos,
     observaciones: carga.observaciones ?? [],
   };

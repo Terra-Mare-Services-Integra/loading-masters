@@ -90,6 +90,16 @@ button.terciario:hover{ color:var(--tm-critical); background:transparent; }
 .acciones{ margin-top:32px; display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
 .aviso{ font-size:13px; color:var(--text-muted); }
 
+.facturaciones .fila{ margin-top:8px; align-items:stretch; }
+.pestana{ display:flex; flex-direction:column; align-items:flex-start; gap:2px; background:var(--tm-white); color:var(--tm-ink); border:1px solid var(--border-subtle); font-weight:600; text-align:left; }
+.pestana .mono{ font-size:11px; font-weight:400; color:var(--text-muted); }
+.pestana:hover{ background:var(--tm-blue-050); border-color:var(--tm-blue-light); }
+.pestana.activa{ border-color:var(--tm-blue); box-shadow:inset 0 -4px 0 var(--tm-blue); background:var(--tm-white); }
+.encabezado{ margin-top:32px; }
+.fechas, .nueva{ margin-top:24px; }
+.fechas .campos, .nueva .campos{ align-items:flex-end; }
+label.ancho{ flex:1 1 280px; }
+input.calculado{ background:var(--tm-surface); color:var(--text-muted); border-style:dashed; }
 fieldset.contenido{ border:0; margin:0; padding:0; min-width:0; }
 fieldset.contenido:disabled{ opacity:.6; }
 
