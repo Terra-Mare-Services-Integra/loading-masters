@@ -50,10 +50,10 @@ export async function listarFacturaciones() {
 // Facturaciones de todos los meses, con lo necesario para el estado y el P&L.
 export async function listarFacturacionesPorMes() {
   const filas = ok(await supabase.from('certificaciones')
-    .select('id, nombre, mes, desde, hasta, total, factores, factura_emitida_el, cobrada_el, observaciones, numero'));
+    .select('id, nombre, mes, desde, hasta, total, factores, reembolsables, factura_emitida_el, cobrada_el, observaciones, numero'));
   return Object.fromEntries(filas.map((f) => [f.mes, {
     id: f.id, nombre: f.nombre, mes: f.mes, desde: f.desde, hasta: f.hasta, total: Number(f.total),
-    factores: f.factores, facturaEmitidaEl: f.factura_emitida_el, cobradaEl: f.cobrada_el,
+    factores: f.factores, reembolsables: f.reembolsables ?? {}, facturaEmitidaEl: f.factura_emitida_el, cobradaEl: f.cobrada_el,
     observaciones: f.observaciones, numero: f.numero,
   }]));
 }
@@ -363,7 +363,7 @@ export async function marcarReembolsablesFacturados(ids, mes) {
   ok(await supabase.from('gastos_operacion').update({ facturado_en: mes }).in('id', ids));
 }
 
-// ─── Gastos de administración ────────────────────────────────────────────────
+// ─── Gastos de administración y del vehículo (columna area) ──────────────────
 
 export async function leerGastosAdmin() {
   return ok(await supabase.from('gastos_administracion').select('*').order('fecha').order('created_at'))
@@ -383,4 +383,21 @@ export async function guardarGastosAdmin(gastos) {
 
 export async function borrarGastoAdmin(id) {
   ok(await supabase.from('gastos_administracion').delete().eq('id', id));
+}
+
+// ─── Up selling ──────────────────────────────────────────────────────────────
+
+export async function leerUpselling() {
+  return ok(await supabase.from('upselling').select('*').order('mes').order('created_at'))
+    .map((u) => ({ ...u, ingreso: Number(u.ingreso), costo: Number(u.costo), tipo_cambio: u.tipo_cambio === null ? null : Number(u.tipo_cambio) }));
+}
+
+export async function guardarUpselling(linea) {
+  const { id, created_at, updated_at, updated_by, ...campos } = linea;
+  const q = id ? supabase.from('upselling').update(campos).eq('id', id) : supabase.from('upselling').insert(campos);
+  return ok(await q.select('*').single());
+}
+
+export async function borrarUpselling(id) {
+  ok(await supabase.from('upselling').delete().eq('id', id));
 }

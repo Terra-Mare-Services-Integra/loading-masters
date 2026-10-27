@@ -108,6 +108,7 @@ export function costoCapitanesMes(periodoMes, personal, cargas, tc, reales = {})
 }
 
 const ITEMS_SEGUROS = ['1a', '1b', '1c'];
+const FEE_1D = CONTRATO_VMOS.items.find((i) => i.codigo === '1d').fee;
 const estado = (f) => (f?.cobradaEl ? 'cobrado' : f?.facturaEmitidaEl ? 'facturado' : 'proyeccion');
 
 /**
@@ -127,8 +128,12 @@ const estado = (f) => (f?.cobradaEl ? 'cobrado' : f?.facturaEmitidaEl ? 'factura
  * @param {Record<string, {compras: number, sergio: number, reembolsables: number}>} [p.gastos]  gastos de operación por mes calendario
  * @param {Record<string, {total: number}>} [p.administracion]  gastos de administración por mes calendario
  * @param {number|null} [p.administracionUsd]  presupuesto mensual de administración (si no, el del escenario)
+ * @param {Record<string, {total: number}>} [p.vehiculo]  gastos del vehículo por mes calendario
+ * @param {(mes: string) => number} [p.vehiculoUsd]  presupuesto de gastos del vehículo de cada mes
+ * @param {(mes: string) => number} [p.amortizacionUsd]  amortización de la camioneta de cada mes
+ * @param {Record<string, {ingreso: number, costo: number}>} [p.upselling]  up selling por mes calendario
  */
-export function calcularPnl({ periodos, facturaciones, personal, cargas, escenarios, ajustes = [], fx, inicioSeguros = null, inicioPleno = null, costoSegurosUsd = null, sueldosReales = {}, gastos = {}, administracion = {}, administracionUsd = null }) {
+export function calcularPnl({ periodos, facturaciones, personal, cargas, escenarios, ajustes = [], fx, inicioSeguros = null, inicioPleno = null, costoSegurosUsd = null, sueldosReales = {}, gastos = {}, administracion = {}, administracionUsd = null, vehiculo = {}, vehiculoUsd = () => 0, amortizacionUsd = () => 0, upselling = {} }) {
   // El factor de la proyección es el del último día de la última facturación cargada (p. ej. 0,75).
   const cargadas = periodos.map((p) => facturaciones[p.mes]).filter(Boolean);
   const ultima = cargadas.at(-1);
@@ -156,8 +161,10 @@ export function calcularPnl({ periodos, facturaciones, personal, cargas, escenar
     };
     const cert = certificar({ periodo, factores, precios: (d) => preciosEnFecha(ajustes, d) });
     const ingresoSeguros = cert.items.filter((i) => ITEMS_SEGUROS.includes(i.codigo)).reduce((s, i) => s + i.importe, 0);
-    const ingresoCoc = (f ? f.total : cert.total) - ingresoSeguros;
-    const ingreso = ingresoCoc + ingresoSeguros;
+    // Los reembolsables facturados (ítem 1d, con fee) van a Up selling, no al CO&C.
+    const ingreso1d = f ? Math.round(Number(f.reembolsables?.['1d'] ?? 0) * FEE_1D * 100) / 100 : 0;
+    const ingresoCoc = (f ? f.total : cert.total) - ingresoSeguros - ingreso1d;
+    const ingresoContrato = ingresoCoc + ingresoSeguros;
 
     // Capitanes: suma de los meses calendario que abarca el período (el primero incluye octubre).
     let capitanes = 0;
@@ -181,6 +188,9 @@ export function calcularPnl({ periodos, facturaciones, personal, cargas, escenar
     let sergioFijo = 0;
     let reembolsables = 0;
     let estructura = 0;
+    let vehiculoCosto = 0;
+    let upIngreso = 0;
+    let upCosto = 0;
     let operacionReal = false;
     let administracionReal = false;
     for (let mes = periodo.desde.slice(0, 7); mes <= periodo.hasta.slice(0, 7); mes = mesSiguiente(mes)) {
@@ -199,11 +209,21 @@ export function calcularPnl({ periodos, facturaciones, personal, cargas, escenar
       const a = administracion[mes];
       estructura += a?.total > 0 ? a.total : (administracionUsd ?? esc.estructuraTmUsd) * fx(mes) * m;
       administracionReal ||= a?.total > 0;
+      // Vehículo: amortización de la compra más los gastos cargados (o el presupuesto si el mes no
+      // está facturado).
+      const v = vehiculo[mes];
+      upIngreso += upselling[mes]?.ingreso ?? 0;
+      upCosto += upselling[mes]?.costo ?? 0;
+      vehiculoCosto += amortizacionUsd(mes) * fx(mes) * m + (v?.total > 0 || real ? v?.total ?? 0 : vehiculoUsd(mes) * fx(mes) * m);
     }
     // Imprevistos e impuestos: solo en la proyección; en los meses ya facturados no se aplican.
     const pctImpuestos = real ? 0 : esc.pctImprevistos + esc.pctCredito + esc.pctIibb;
+    // Up selling: líneas cargadas más los reembolsables (ingreso con fee menos su costo).
+    const upsellingIngreso = ingreso1d + upIngreso;
+    const upsellingCosto = reembolsables + upCosto;
+    const ingreso = ingresoContrato + upsellingIngreso;
     const impuestos = ingreso * pctImpuestos;
-    const costosTotal = capitanes + operacion + polizas + estructura + sergioFijo + reembolsables + impuestos;
+    const costosTotal = capitanes + operacion + polizas + estructura + vehiculoCosto + sergioFijo + upsellingCosto + impuestos;
     const bruto = ingreso - costosTotal;
     // Participación de Sergio sobre el resultado del servicio (sin la parte de seguros).
     const brutoSeguros = ingresoSeguros - polizas - ingresoSeguros * pctImpuestos;
@@ -216,8 +236,9 @@ export function calcularPnl({ periodos, facturaciones, personal, cargas, escenar
       cargada: Boolean(f),
       factor,
       fx: tc,
-      ingresoCoc, ingresoSeguros, ingreso,
-      capitanes, sueldosReales: sueldosReales_, operacion, operacionReal, reembolsables, polizas, estructura, administracionReal, sergioFijo, impuestos,
+      ingresoCoc, ingresoSeguros, ingresoContrato, ingreso,
+      upsellingIngreso, upsellingCosto, upselling: upsellingIngreso - upsellingCosto,
+      capitanes, sueldosReales: sueldosReales_, operacion, operacionReal, reembolsables, polizas, estructura, administracionReal, vehiculo: vehiculoCosto, sergioFijo, impuestos,
       // Sergio factura como proveedor: su fijo va dentro de Operación.
       operacionTotal: operacion + sergioFijo,
       bruto,
@@ -229,7 +250,7 @@ export function calcularPnl({ periodos, facturaciones, personal, cargas, escenar
 
 // Sumas de una lista de filas del P&L.
 export function totalesPnl(filas) {
-  const campos = ['ingresoCoc', 'ingresoSeguros', 'ingreso', 'capitanes', 'operacion', 'operacionTotal', 'reembolsables', 'polizas', 'estructura', 'sergioFijo', 'impuestos', 'bruto', 'participacion', 'generacion'];
+  const campos = ['ingresoCoc', 'ingresoSeguros', 'ingresoContrato', 'ingreso', 'upsellingIngreso', 'upsellingCosto', 'upselling', 'capitanes', 'operacion', 'operacionTotal', 'reembolsables', 'polizas', 'estructura', 'vehiculo', 'sergioFijo', 'impuestos', 'bruto', 'participacion', 'generacion'];
   return Object.fromEntries(campos.map((k) => [k, filas.reduce((s, f) => s + f[k], 0)]));
 }
 

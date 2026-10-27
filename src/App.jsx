@@ -11,7 +11,9 @@ import * as db from './datos.js';
 import { RUBROS, resumenGastos, gastosPorMes, montoArs, etiquetaGasto } from './lib/operacion.js';
 import { semestresContrato, cumplimiento, fraccionSemestre, bonoSemestre } from './lib/desempeno.js';
 import { completarEscenario } from './lib/resultado.js';
-import { RUBROS_ADMIN, nombreRubroAdmin, presupuestoMensualUsd, resumenAdmin, adminPorMes, copiarAlMes } from './lib/administracion.js';
+import { ingresoArs, costoArs, upsellingPorMes } from './lib/upselling.js';
+import { RUBROS_VEHICULO, mesesAmortizacion, cuotaAmortizacionUsd, amortizacionMesUsd } from './lib/vehiculo.js';
+import { RUBROS_ADMIN, presupuestoMensualUsd, resumenAdmin, adminPorMes, copiarAlMes } from './lib/administracion.js';
 import { costoMensualUsd, cronogramaCuotas, primaAnualUsd } from './lib/seguros.js';
 import { periodosContrato, periodosSueldos, calcularPnl, costoCapitanesMes, participacionPorAnio, mesesEquivalentes } from './lib/pnl.js';
 
@@ -149,6 +151,8 @@ function Certificacion() {
       {vista === 'operacion' && <Operacion />}
       {vista === 'seguros' && <Seguros />}
       {vista === 'administracion' && <Administracion />}
+      {vista === 'vehiculo' && <Vehiculo />}
+      {vista === 'upselling' && <Upselling />}
     </>
   );
 }
@@ -163,9 +167,9 @@ function useContrato() {
     Promise.all([
       db.leerEscenarios(), db.listarFacturacionesPorMes(), db.leerPersonal(), db.leerReferencia('cargas_sociales'),
       db.leerReferencia('inicios'), db.leerAjustes(), db.leerDolarPorMes(CONTRATO_VMOS.inicioServicio.slice(0, 7)),
-      db.leerSueldosMes(), db.leerGastos(), db.leerReferencia('seguros'), db.leerGastosAdmin(), db.leerReferencia('administracion'), db.leerReferencia('personas_gastos'),
+      db.leerSueldosMes(), db.leerGastos(), db.leerReferencia('seguros'), db.leerGastosAdmin(), db.leerReferencia('administracion'), db.leerReferencia('personas_gastos'), db.leerReferencia('vehiculo'), db.leerUpselling(),
     ])
-      .then(([escenarios, facturaciones, personal, cargas, inicios, ajustes, dolar, sueldos, gastos, seguros, gastosAdmin, administracion, personasGastos]) => {
+      .then(([escenarios, facturaciones, personal, cargas, inicios, ajustes, dolar, sueldos, gastos, seguros, gastosAdmin, administracion, personasGastos, vehiculoRef, upselling]) => {
         const esperado = escenarios.esperado && completarEscenario(escenarios.esperado.supuestos);
         const arranque = escenarios.arranque && completarEscenario(escenarios.arranque.supuestos);
         if (!esperado || !arranque || !cargas) throw new Error('Faltan los supuestos o las cargas sociales en la base de datos');
@@ -177,8 +181,17 @@ function useContrato() {
           ...m, reales: sueldos[m.mes] ?? {}, costo: costoCapitanesMes(m, personal, cargas, fx(m.mes), sueldosReales[m.mes]),
         }));
         const resumenGastosMes = gastosPorMes(gastos);
-        const resumenAdminMes = adminPorMes(gastosAdmin);
-        const presupuestoAdmin = administracion?.presupuestoUsd ?? {};
+        // Administración y vehículo: gastos por mes y presupuesto mensual; la camioneta se amortiza.
+        const finContrato = periodos.at(-1).hasta;
+        const delArea = (area) => gastosAdmin.filter((g) => (g.area ?? 'administracion') === area);
+        const refsFijos = { administracion: administracion ?? {}, vehiculo: vehiculoRef ?? {} };
+        const resumenFijos = { administracion: adminPorMes(delArea('administracion')), vehiculo: adminPorMes(delArea('vehiculo')) };
+        const presupuestos = { administracion: refsFijos.administracion.presupuestoUsd ?? {}, vehiculo: refsFijos.vehiculo.presupuestoUsd ?? {} };
+        // Sin fecha de compra cargada, la camioneta se supone comprada al inicio de la operación plena.
+        const camioneta = { ...refsFijos.vehiculo, fechaCompra: refsFijos.vehiculo.fechaCompra || inicios?.operacionPlena || null };
+        const amortizacionUsd = (mes) => amortizacionMesUsd(camioneta, finContrato, mes);
+        // Los gastos del vehículo se presupuestan desde el mes de compra.
+        const vehiculoUsd = (mes) => (camioneta.fechaCompra && mes >= camioneta.fechaCompra.slice(0, 7) ? presupuestoMensualUsd(presupuestos.vehiculo) : 0);
         const filas = calcularPnl({
           periodos, facturaciones, personal, cargas, fx, sueldosReales, gastos: resumenGastosMes,
           escenarios: { arranque, esperado },
@@ -186,19 +199,27 @@ function useContrato() {
           inicioSeguros: inicios?.seguros ?? null,
           inicioPleno: inicios?.operacionPlena ?? null,
           costoSegurosUsd: seguros?.polizas ? costoMensualUsd(seguros.polizas) : null,
-          administracion: resumenAdminMes,
-          administracionUsd: administracion ? presupuestoMensualUsd(presupuestoAdmin) : null,
+          administracion: resumenFijos.administracion,
+          administracionUsd: administracion ? presupuestoMensualUsd(presupuestos.administracion) : null,
+          vehiculo: resumenFijos.vehiculo,
+          vehiculoUsd,
+          amortizacionUsd,
+          upselling: upsellingPorMes(upselling),
         });
-        // Administración por mes calendario: gastos cargados y el presupuesto.
-        const mesesAdministracion = periodosSueldos(esperado.mesesContrato).map((m) => {
-          const meq = mesesEquivalentes(m);
-          return {
-            ...m, meq, fx: fx(m.mes),
-            gastos: gastosAdmin.filter((g) => g.mes === m.mes),
-            resumen: resumenAdminMes[m.mes],
-            proyectado: presupuestoMensualUsd(presupuestoAdmin) * fx(m.mes) * meq,
-          };
-        });
+        // Administración y vehículo por mes calendario: gastos cargados, presupuesto y amortización.
+        const mesesFijos = Object.fromEntries(['administracion', 'vehiculo'].map((area) => [area,
+          periodosSueldos(esperado.mesesContrato).map((m) => {
+            const meq = mesesEquivalentes(m);
+            const fila = filas.find((f) => f.desde <= m.hasta && f.hasta >= m.desde);
+            const amortizacion = area === 'vehiculo' ? amortizacionUsd(m.mes) * fx(m.mes) * meq : 0;
+            const mensualUsd = area === 'vehiculo' ? vehiculoUsd(m.mes) : presupuestoMensualUsd(presupuestos[area]);
+            const presupuesto = area === 'vehiculo' && fila?.real ? 0 : mensualUsd * fx(m.mes) * meq;
+            return {
+              ...m, meq, fx: fx(m.mes), amortizacion, presupuesto,
+              gastos: delArea(area).filter((g) => g.mes === m.mes),
+              resumen: resumenFijos[area][m.mes],
+            };
+          })]));
         // Operación por mes calendario: gastos cargados y la proyección (con el factor del período).
         const mesesOperacion = periodosSueldos(esperado.mesesContrato).map((m) => {
           const fila = filas.find((f) => f.desde <= m.hasta && f.hasta >= m.desde);
@@ -216,7 +237,7 @@ function useContrato() {
               : { operacion: esc.operacionUsd * fx(m.mes) * meq, sergio: esc.sgFijoUsd * factor * fx(m.mes) * meq },
           };
         });
-        setDatos({ periodos, facturaciones, personal, filas, mesesSueldos, mesesOperacion, mesesAdministracion, presupuestoAdmin, personasGastos: personasGastos ?? [], dolarUltimo: dolar.ultimo, inicios: inicios ?? {}, seguros: seguros ?? { cuotas: 10, polizas: [] }, arranque });
+        setDatos({ periodos, facturaciones, personal, filas, mesesSueldos, mesesOperacion, mesesFijos, refsFijos, finContrato, upselling, personasGastos: personasGastos ?? [], dolarUltimo: dolar.ultimo, inicios: inicios ?? {}, seguros: seguros ?? { cuotas: 10, polizas: [] }, arranque });
       })
       .catch((e) => setError(e.message));
   }, [version]);
@@ -1287,11 +1308,12 @@ const MODULOS = [
   { id: 'sueldos', nombre: 'Sueldos', desc: 'Capitanes en relación de dependencia, mes a mes' },
   { id: 'desempeno', nombre: 'Desempeño', desc: 'Evaluación semestral 360° y bono de los capitanes' },
   { id: 'operacion', nombre: 'Operación', desc: 'Compras y reembolsables: transporte, combustible, vivienda, EPP, Sergio' },
-  { id: 'vehiculo', nombre: 'Vehículo', desc: 'Camioneta, pólizas, services' },
+  { id: 'vehiculo', nombre: 'Vehículo', desc: 'Camioneta: amortización, póliza, services, patente, combustible' },
   { id: 'administracion', nombre: 'Administración', desc: 'Sistemas de sueldos y contable, telefonía, licencias, honorarios' },
+  { id: 'upselling', nombre: 'Up selling', desc: 'Trabajos que se cobran aparte (ingreso y costo) y reembolsables' },
   { id: 'seguros', nombre: 'Seguros', desc: 'RC y E&O: prima anual en cuotas, facturadas con los ítems 1a–1c' },
 ];
-const ACTIVOS = ['facturaciones', 'formula', 'resultado', 'sueldos', 'desempeno', 'operacion', 'administracion', 'seguros'];
+const ACTIVOS = ['facturaciones', 'formula', 'resultado', 'sueldos', 'desempeno', 'operacion', 'vehiculo', 'administracion', 'seguros', 'upselling'];
 
 function Inicio({ onAbrir }) {
   return (
@@ -1323,13 +1345,16 @@ function Inicio({ onAbrir }) {
 
 // ─── Resultado: P&L mes a mes ────────────────────────────────────────────────
 
+// Columnas que suman (el resto son costos y se muestran en negativo).
+const POSITIVOS_PNL = ['ingresoContrato', 'upselling', 'bruto', 'generacion'];
 const COLUMNAS_PNL = [
-  ['ingreso', 'Ingresos'],
+  ['ingresoContrato', 'Ingresos contrato'],
+  ['upselling', 'Up selling (neto)'],
   ['capitanes', 'Capitanes'],
   ['operacionTotal', 'Operación (incl. Sergio)'],
-  ['reembolsables', 'Reembolsables'],
   ['polizas', 'Seguros (pólizas)'],
   ['estructura', 'Administración'],
+  ['vehiculo', 'Vehículo'],
   ['impuestos', 'Imprev. e impuestos'],
   ['bruto', 'Resultado bruto'],
   ['participacion', 'Particip. Sergio (provisión)'],
@@ -1398,7 +1423,7 @@ function Resultado() {
                 <td><span className={`bolita ${ESTADO_MES[f.estado].color}`} title={ESTADO_MES[f.estado].texto} /> {f.nombre}</td>
                 {COLUMNAS_PNL.map(([k]) => (
                   <td key={k} className={`n mono ${k === 'generacion' ? 'fuerte' : ''}`}>
-                    {formato(['ingreso', 'bruto', 'generacion'].includes(k) ? conv(f, k) : -conv(f, k))}
+                    {formato(POSITIVOS_PNL.includes(k) ? conv(f, k) : -conv(f, k))}
                   </td>
                 ))}
               </tr>
@@ -1409,7 +1434,7 @@ function Resultado() {
               <tr>
                 <td>Total{anio !== 'total' && ` ${anio}`} {filtro === 'actuales' ? 'facturado' : `(${filas.length} meses)`}</td>
                 {COLUMNAS_PNL.map(([k]) => (
-                  <td key={k} className="n mono">{formato(['ingreso', 'bruto', 'generacion'].includes(k) ? total(k) : -total(k))}</td>
+                  <td key={k} className="n mono">{formato(POSITIVOS_PNL.includes(k) ? total(k) : -total(k))}</td>
                 ))}
               </tr>
             </tfoot>
@@ -2303,20 +2328,45 @@ function Seguros() {
   );
 }
 
-// ─── Administración ──────────────────────────────────────────────────────────
+// ─── Administración y Vehículo ───────────────────────────────────────────────
+
+// Los dos módulos funcionan igual: gastos por mes con rubro y un presupuesto mensual en USD como
+// proyección. El vehículo suma la amortización de la camioneta.
+const AREAS = {
+  administracion: {
+    titulo: 'Administración', rubros: RUBROS_ADMIN,
+    intro: 'Estructura de Terra Mare para el contrato, un mes por cajita: sistemas de sueldos y contable, telefonía, licencias, honorarios. Si un mes tiene gastos cargados, reemplazan al presupuesto en el Resultado.',
+  },
+  vehiculo: {
+    titulo: 'Vehículo', rubros: RUBROS_VEHICULO,
+    intro: 'La camioneta: su compra se amortiza en cuotas mensuales y los gastos (póliza, services, patente, combustible) se cargan por mes. Si un mes tiene gastos cargados reemplazan al presupuesto; una vez facturado el mes, cuenta solo lo cargado.',
+  },
+};
+const nombreRubroDe = (area, id) => AREAS[area].rubros.find((r) => r.id === id)?.nombre ?? id;
 
 function Administracion() {
+  return <ModuloGastosFijos area="administracion" />;
+}
+
+function Vehiculo() {
+  return <ModuloGastosFijos area="vehiculo" />;
+}
+
+function ModuloGastosFijos({ area }) {
   const { datos, error, recargar } = useContrato();
   const [abierto, setAbierto] = useState(null);
   const hoy = hoyIso();
   if (!datos) return <main>{error ? <p className="aviso error">Error: {error}</p> : 'Cargando…'}</main>;
+  const cfg = AREAS[area];
+  const meses = datos.mesesFijos[area];
+  const fx = datos.dolarUltimo ?? datos.arranque.fx;
 
   if (abierto) {
-    const i = datos.mesesAdministracion.findIndex((m) => m.mes === abierto);
+    const i = meses.findIndex((m) => m.mes === abierto);
     return (
       <main>
         <button type="button" className="terciario volver-meses" onClick={() => { setAbierto(null); recargar(); }}>← Volver a los meses</button>
-        <GastosAdminMes mes={datos.mesesAdministracion[i]} anterior={datos.mesesAdministracion[i - 1]} datos={datos} onCambio={recargar} />
+        <GastosFijosMes area={area} mes={meses[i]} anterior={meses[i - 1]} datos={datos} onCambio={recargar} />
       </main>
     );
   }
@@ -2325,22 +2375,20 @@ function Administracion() {
     <main>
       <section className="encabezado">
         <div>
-          <h1>Administración.</h1>
+          <h1>{cfg.titulo}.</h1>
           <div className="filete" />
-          <p className="aviso">
-            Estructura de Terra Mare para el contrato, un mes por cajita: sistemas de sueldos y contable, telefonía, licencias,
-            honorarios. Si un mes tiene gastos cargados, reemplazan al presupuesto en el Resultado.
-          </p>
+          <p className="aviso">{cfg.intro}</p>
         </div>
         <div className="leyenda">
           {Object.values(ESTADO_GASTOS).map((e) => <span key={e.color}><span className={`bolita ${e.color}`} /> {e.texto}</span>)}
         </div>
       </section>
 
-      <PresupuestoAdmin presupuesto={datos.presupuestoAdmin} fx={datos.dolarUltimo ?? datos.arranque.fx} onCambio={recargar} />
+      {area === 'vehiculo' && <Camioneta datos={datos} fx={fx} onCambio={recargar} />}
+      <PresupuestoFijo area={area} referencia={datos.refsFijos[area]} fx={fx} onCambio={recargar} />
 
       <div className="meses">
-        {datos.mesesAdministracion.map((m) => {
+        {meses.map((m) => {
           const disponible = m.desde <= hoy;
           const e = ESTADO_GASTOS[estadoGastos(m.resumen)];
           const cargado = m.resumen?.cantidad > 0;
@@ -2350,7 +2398,7 @@ function Administracion() {
               <span className="mes-fila"><span className="mes-n mono">{String(m.n).padStart(2, '0')}</span><span className={`bolita ${e.color}`} title={e.texto} /></span>
               <span className="mes-nombre">{m.nombre}</span>
               <span className="mes-fechas mono">{fecha(m.desde)} – {fecha(m.hasta)}</span>
-              <span className={`mes-monto mono ${cargado ? '' : 'proyectado'}`}>{millones(cargado ? m.resumen.total : m.proyectado)}</span>
+              <span className={`mes-monto mono ${cargado ? '' : 'proyectado'}`}>{millones((cargado ? m.resumen.total : m.presupuesto) + m.amortizacion)}</span>
             </button>
           );
         })}
@@ -2359,9 +2407,64 @@ function Administracion() {
   );
 }
 
+// Datos de la camioneta: precio, fecha de compra, valor residual y meses de amortización.
+function Camioneta({ datos, fx, onCambio }) {
+  const ref = datos.refsFijos.vehiculo;
+  const [form, setForm] = useState(() => ({
+    precioUsd: ref.precioUsd ?? '', fechaCompra: ref.fechaCompra ?? '', residualUsd: ref.residualUsd ?? '', meses: ref.meses ?? '',
+  }));
+  const [aviso, setAviso] = useState('');
+  const supuesta = { ...form, fechaCompra: form.fechaCompra || datos.inicios.operacionPlena || '' };
+  const meses = mesesAmortizacion(supuesta, datos.finContrato);
+  const cuota = cuotaAmortizacionUsd(supuesta, datos.finContrato);
+  const set = (c) => setForm((f) => ({ ...f, ...c }));
+
+  async function guardar() {
+    setAviso('');
+    try {
+      await db.guardarReferencia('vehiculo', {
+        ...ref, precioUsd: Number(form.precioUsd) || 0, fechaCompra: form.fechaCompra || null,
+        residualUsd: Number(form.residualUsd) || 0, meses: Number(form.meses) || null,
+      }, 'Camioneta (precio, compra, amortización) y presupuesto mensual de gastos del vehículo en USD');
+      setAviso('Guardado');
+      onCambio();
+    } catch (e) {
+      setAviso(`Error: ${e.message}`);
+    }
+  }
+
+  return (
+    <section className="tarjeta">
+      <div className="overline">Camioneta</div>
+      <div className="campos">
+        <label>Precio de compra (USD, sin IVA)
+          <input type="number" min="0" step="any" className="mono" value={form.precioUsd} onChange={(e) => set({ precioUsd: e.target.value })} />
+        </label>
+        <label>Fecha de compra
+          <input type="date" value={form.fechaCompra} onChange={(e) => set({ fechaCompra: e.target.value })} />
+        </label>
+        <label>Valor residual (USD)
+          <input type="number" min="0" step="any" className="mono" value={form.residualUsd} onChange={(e) => set({ residualUsd: e.target.value })} />
+        </label>
+        <label>Meses de amortización
+          <input type="number" min="1" className="mono corto" value={form.meses} placeholder={String(meses || '')} onChange={(e) => set({ meses: e.target.value })} />
+        </label>
+        <button type="button" onClick={guardar}>Guardar</button>
+        {aviso && <span className={`ayuda ${aviso.startsWith('Error') ? 'error' : ''}`}>{aviso}</span>}
+      </div>
+      <p className="ayuda">
+        Amortización: <span className="mono">USD {dec(cuota)}</span> por mes ≈ {pesos(cuota * fx)}, durante {meses} meses
+        {supuesta.fechaCompra && ` desde ${nombreMes(supuesta.fechaCompra.slice(0, 7))}`}.
+        {!form.fechaCompra && datos.inicios.operacionPlena && ` Sin fecha de compra se supone el ${fecha(datos.inicios.operacionPlena)} (operación plena).`}
+        {' '}Si no cargás los meses, se amortiza hasta el fin del contrato.
+      </p>
+    </section>
+  );
+}
+
 // Presupuesto mensual en USD por rubro: es la proyección de los meses sin gastos cargados.
-function PresupuestoAdmin({ presupuesto, fx, onCambio }) {
-  const [valores, setValores] = useState(() => ({ ...presupuesto }));
+function PresupuestoFijo({ area, referencia, fx, onCambio }) {
+  const [valores, setValores] = useState(() => ({ ...referencia.presupuestoUsd }));
   const [aviso, setAviso] = useState('');
   const total = presupuestoMensualUsd(valores);
 
@@ -2369,7 +2472,7 @@ function PresupuestoAdmin({ presupuesto, fx, onCambio }) {
     setAviso('');
     try {
       const limpio = Object.fromEntries(Object.entries(valores).map(([k, v]) => [k, Number(v) || 0]).filter(([, v]) => v > 0));
-      await db.guardarReferencia('administracion', { presupuestoUsd: limpio }, 'Presupuesto mensual de administración en USD, por rubro');
+      await db.guardarReferencia(area, { ...referencia, presupuestoUsd: limpio });
       setAviso('Guardado');
       onCambio();
     } catch (e) {
@@ -2379,12 +2482,12 @@ function PresupuestoAdmin({ presupuesto, fx, onCambio }) {
 
   return (
     <section className="tarjeta presupuesto-admin">
-      <div className="overline">Presupuesto mensual (proyección)</div>
+      <div className="overline">Presupuesto mensual de gastos (proyección)</div>
       <div className="tabla-scroll">
         <table className="tabla-ajuste">
           <thead><tr><th>Rubro</th><th>USD por mes</th></tr></thead>
           <tbody>
-            {RUBROS_ADMIN.map((ru) => (
+            {AREAS[area].rubros.map((ru) => (
               <tr key={ru.id}>
                 <td>{ru.nombre}</td>
                 <td><input type="number" min="0" step="any" className="mono" value={valores[ru.id] ?? ''}
@@ -2403,19 +2506,21 @@ function PresupuestoAdmin({ presupuesto, fx, onCambio }) {
   );
 }
 
-const gastoAdminVacio = (mes, fechaDefecto) => ({
-  mes: mes.mes, fecha: fechaDefecto, rubro: RUBROS_ADMIN[0].id, descripcion: '', proveedor: '', factura_numero: '',
+const gastoFijoVacio = (area, mes, fechaDefecto) => ({
+  area, mes: mes.mes, fecha: fechaDefecto, rubro: AREAS[area].rubros[0].id, descripcion: '', proveedor: '', factura_numero: '',
   moneda: 'ARS', monto: '', iva_pct: 0.21, tipo_cambio: null, pagado_el: null, pagado_por: '',
 });
 
-function GastosAdminMes({ mes, anterior, datos, onCambio }) {
+function GastosFijosMes({ area, mes, anterior, datos, onCambio }) {
+  const cfg = AREAS[area];
   const [gastos, setGastos] = useState(mes.gastos);
   const hoy = hoyIso();
   const fechaDefecto = hoy >= mes.desde && hoy <= mes.hasta ? hoy : mes.desde;
-  const [nuevo, setNuevo] = useState(() => gastoAdminVacio(mes, fechaDefecto));
+  const [nuevo, setNuevo] = useState(() => gastoFijoVacio(area, mes, fechaDefecto));
   const [error, setError] = useState('');
   const r = resumenAdmin(gastos);
   const tc = datos.dolarUltimo;
+  const presupuesto = datos.refsFijos[area].presupuestoUsd ?? {};
   const numeros = (g) => ({ ...g, monto: Number(g.monto), iva_pct: Number(g.iva_pct), tipo_cambio: g.tipo_cambio && Number(g.tipo_cambio) });
 
   async function guardar() {
@@ -2430,7 +2535,7 @@ function GastosAdminMes({ mes, anterior, datos, onCambio }) {
         tipo_cambio: nuevo.moneda === 'USD' ? Number(nuevo.tipo_cambio) : null, pagado_el: nuevo.pagado_el || null,
       });
       setGastos((gs) => [...gs, numeros(g)]);
-      setNuevo({ ...gastoAdminVacio(mes, nuevo.fecha), rubro: nuevo.rubro });
+      setNuevo({ ...gastoFijoVacio(area, mes, nuevo.fecha), rubro: nuevo.rubro });
       onCambio();
     } catch (e) {
       setError(e.message);
@@ -2462,7 +2567,7 @@ function GastosAdminMes({ mes, anterior, datos, onCambio }) {
   }
 
   async function borrar(g) {
-    if (!confirm(`¿Borrar "${nombreRubroAdmin(g.rubro)} · ${g.descripcion || g.proveedor}"?`)) return;
+    if (!confirm(`¿Borrar "${nombreRubroDe(area, g.rubro)} · ${g.descripcion || g.proveedor}"?`)) return;
     try {
       await db.borrarGastoAdmin(g.id);
       setGastos((gs) => gs.filter((x) => x.id !== g.id));
@@ -2473,7 +2578,7 @@ function GastosAdminMes({ mes, anterior, datos, onCambio }) {
   }
 
   const set = (c) => setNuevo((x) => ({ ...x, ...c }));
-  const rubrosConGastos = RUBROS_ADMIN.filter((ru) => r.porRubro[ru.id]);
+  const rubrosConGastos = cfg.rubros.filter((ru) => r.porRubro[ru.id]);
 
   return (
     <>
@@ -2484,7 +2589,8 @@ function GastosAdminMes({ mes, anterior, datos, onCambio }) {
           <div className="filete" />
         </div>
         <div className="resumen-eval">
-          <div><span className="etiqueta">Administración</span> <span className="mono fuerte">{pesos(r.total)}</span> <span className="ayuda">presupuesto {pesos(mes.proyectado)}</span></div>
+          <div><span className="etiqueta">{area === 'vehiculo' ? 'Gastos' : cfg.titulo}</span> <span className="mono fuerte">{pesos(r.total)}</span> <span className="ayuda">presupuesto {pesos(mes.presupuesto)}</span></div>
+          {area === 'vehiculo' && <div><span className="etiqueta">Amortización camioneta</span> <span className="mono fuerte">{pesos(mes.amortizacion)}</span></div>}
         </div>
       </section>
       <p className="aviso">Montos sin IVA. Si el mes tiene gastos cargados, reemplazan al presupuesto en el Resultado.</p>
@@ -2498,7 +2604,7 @@ function GastosAdminMes({ mes, anterior, datos, onCambio }) {
                 <tr key={ru.id}>
                   <td>{ru.nombre}</td>
                   <td className="n mono">{pesos(r.porRubro[ru.id])}</td>
-                  <td className="n mono">{datos.presupuestoAdmin[ru.id] ? pesos(datos.presupuestoAdmin[ru.id] * mes.fx * mes.meq) : '—'}</td>
+                  <td className="n mono">{presupuesto[ru.id] ? pesos(presupuesto[ru.id] * mes.fx * mes.meq) : '—'}</td>
                 </tr>
               ))}
             </tbody>
@@ -2514,7 +2620,7 @@ function GastosAdminMes({ mes, anterior, datos, onCambio }) {
         <div className="campos">
           <label>Rubro
             <select value={nuevo.rubro} onChange={(e) => set({ rubro: e.target.value })}>
-              {RUBROS_ADMIN.map((ru) => <option key={ru.id} value={ru.id}>{ru.nombre}</option>)}
+              {cfg.rubros.map((ru) => <option key={ru.id} value={ru.id}>{ru.nombre}</option>)}
             </select>
           </label>
           <label>Fecha<input type="date" value={nuevo.fecha} onChange={(e) => set({ fecha: e.target.value })} /></label>
@@ -2552,7 +2658,7 @@ function GastosAdminMes({ mes, anterior, datos, onCambio }) {
             {gastos.map((g) => (
               <tr key={g.id}>
                 <td className="mono">{fecha(g.fecha)}</td>
-                <td>{nombreRubroAdmin(g.rubro)}</td>
+                <td>{nombreRubroDe(area, g.rubro)}</td>
                 <td>{g.descripcion}</td>
                 <td>{g.proveedor}{g.factura_numero && <span className="ayuda"> · {g.factura_numero}</span>}</td>
                 <td className="n mono">{g.moneda === 'USD' ? `USD ${dec(g.monto, 2)}` : pesos(g.monto)}{g.moneda === 'USD' && <div className="ayuda">TC {dec(g.tipo_cambio, 2)}</div>}</td>
@@ -2565,5 +2671,134 @@ function GastosAdminMes({ mes, anterior, datos, onCambio }) {
         </table>
       </div>
     </>
+  );
+}
+
+// ─── Up selling ──────────────────────────────────────────────────────────────
+
+const lineaVacia = (mes) => ({ mes, descripcion: '', moneda: 'ARS', ingreso: '', costo: '', tipo_cambio: null, notas: '' });
+
+// Trabajos que se cobran aparte dentro del contrato: una línea con ingreso y costo. Abajo, los
+// reembolsables de cada mes (facturados con el fee del ítem 1d).
+function Upselling() {
+  const { datos, error, recargar } = useContrato();
+  const [nueva, setNueva] = useState(() => lineaVacia(hoyIso().slice(0, 7)));
+  const [aviso, setAviso] = useState('');
+  if (!datos) return <main>{error ? <p className="aviso error">Error: {error}</p> : 'Cargando…'}</main>;
+
+  const tc = datos.dolarUltimo;
+  const set = (c) => setNueva((x) => ({ ...x, ...c }));
+  const meses = datos.mesesSueldos.map((m) => m.mes);
+  const conReembolsables = datos.filas.filter((f) => f.upsellingIngreso || f.upsellingCosto);
+  const totalIngreso = datos.upselling.reduce((s, u) => s + ingresoArs(u), 0);
+  const totalCosto = datos.upselling.reduce((s, u) => s + costoArs(u), 0);
+
+  async function agregar() {
+    setAviso('');
+    if (!nueva.descripcion.trim()) return setAviso('Poné una descripción.');
+    if (!(Number(nueva.ingreso) > 0) && !(Number(nueva.costo) > 0)) return setAviso('Cargá el ingreso o el costo.');
+    if (nueva.moneda === 'USD' && !(Number(nueva.tipo_cambio) > 0)) return setAviso('Para USD cargá el tipo de cambio.');
+    try {
+      await db.guardarUpselling({
+        ...nueva, descripcion: nueva.descripcion.trim(), ingreso: Number(nueva.ingreso) || 0, costo: Number(nueva.costo) || 0,
+        tipo_cambio: nueva.moneda === 'USD' ? Number(nueva.tipo_cambio) : null,
+      });
+      setNueva(lineaVacia(nueva.mes));
+      recargar();
+    } catch (e) {
+      setAviso(`Error: ${e.message}`);
+    }
+  }
+
+  async function borrar(u) {
+    if (!confirm(`¿Borrar "${u.descripcion}"?`)) return;
+    try {
+      await db.borrarUpselling(u.id);
+      recargar();
+    } catch (e) {
+      setAviso(`Error: ${e.message}`);
+    }
+  }
+
+  const monto = (u, x) => (u.moneda === 'USD' ? `USD ${dec(x)}` : pesos(x));
+
+  return (
+    <main>
+      <section className="encabezado">
+        <div>
+          <h1>Up selling.</h1>
+          <div className="filete" />
+          <p className="aviso">
+            Trabajos que VMOS paga aparte dentro de este contrato: una línea con su ingreso y su costo, sin IVA. En el Resultado
+            van en la columna Up selling (neto), junto con los reembolsables.
+          </p>
+        </div>
+      </section>
+
+      <section className="tarjeta nuevo-gasto">
+        <div className="overline">Nueva línea</div>
+        <div className="campos">
+          <label>Mes
+            <select value={nueva.mes} onChange={(e) => set({ mes: e.target.value })}>
+              {meses.map((m) => <option key={m} value={m}>{nombreMes(m)}</option>)}
+            </select>
+          </label>
+          <label className="ancho">Descripción<input value={nueva.descripcion} onChange={(e) => set({ descripcion: e.target.value })} /></label>
+          <label>Moneda
+            <select value={nueva.moneda} onChange={(e) => set({ moneda: e.target.value, tipo_cambio: e.target.value === 'USD' ? (nueva.tipo_cambio ?? tc) : null })}>
+              <option value="ARS">ARS</option><option value="USD">USD</option>
+            </select>
+          </label>
+          <label>Ingreso<input type="number" min="0" step="any" className="mono" value={nueva.ingreso} onChange={(e) => set({ ingreso: e.target.value })} /></label>
+          <label>Costo<input type="number" min="0" step="any" className="mono" value={nueva.costo} onChange={(e) => set({ costo: e.target.value })} /></label>
+          {nueva.moneda === 'USD' && <label>Tipo de cambio<input type="number" min="0" step="any" className="mono corto" value={nueva.tipo_cambio ?? ''} onChange={(e) => set({ tipo_cambio: e.target.value })} /></label>}
+          <button type="button" onClick={agregar}>Agregar</button>
+        </div>
+        {aviso && <p className="aviso error">{aviso}</p>}
+      </section>
+
+      <div className="tabla-scroll">
+        <table className="tabla-sueldos gastos">
+          <thead><tr><th>Mes</th><th>Descripción</th><th className="n">Ingreso</th><th className="n">Costo</th><th className="n">Neto ($)</th><th /></tr></thead>
+          <tbody>
+            {datos.upselling.length === 0 && <tr><td colSpan={6} className="aviso">Todavía no hay trabajos de up selling cargados.</td></tr>}
+            {datos.upselling.map((u) => (
+              <tr key={u.id}>
+                <td className="capitalizar">{nombreMes(u.mes)}</td>
+                <td>{u.descripcion}</td>
+                <td className="n mono">{monto(u, u.ingreso)}{u.moneda === 'USD' && <div className="ayuda">TC {dec(u.tipo_cambio)}</div>}</td>
+                <td className="n mono">{monto(u, u.costo)}</td>
+                <td className="n mono fuerte">{pesos(ingresoArs(u) - costoArs(u))}</td>
+                <td><button type="button" className="terciario chico" onClick={() => borrar(u)}>Borrar</button></td>
+              </tr>
+            ))}
+          </tbody>
+          {datos.upselling.length > 0 && (
+            <tfoot><tr><td colSpan={2}>Total</td><td className="n mono">{pesos(totalIngreso)}</td><td className="n mono">{pesos(totalCosto)}</td><td className="n mono">{pesos(totalIngreso - totalCosto)}</td><td /></tr></tfoot>
+          )}
+        </table>
+      </div>
+
+      <section className="tarjeta">
+        <div className="overline">Por período: líneas y reembolsables</div>
+        <p className="ayuda">Los reembolsables suman como ingreso lo facturado en el ítem 1d (con el 10 % de fee) y como costo los gastos Reembolsables de Operación.</p>
+        <div className="tabla-scroll">
+          <table className="tabla-ajuste">
+            <thead><tr><th>Mes</th><th className="n">Ingreso up selling</th><th className="n">Costo up selling</th><th className="n">Neto</th></tr></thead>
+            <tbody>
+              {conReembolsables.length === 0 && <tr><td colSpan={4} className="aviso">Todavía no hay reembolsables ni up selling.</td></tr>}
+              {conReembolsables.map((f) => (
+                <tr key={f.mes}>
+                  <td className="capitalizar">{f.nombre}</td>
+                  <td className="n mono">{pesos(f.upsellingIngreso)}</td>
+                  <td className="n mono">{pesos(f.upsellingCosto)}</td>
+                  <td className="n mono fuerte">{pesos(f.upselling)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
   );
 }

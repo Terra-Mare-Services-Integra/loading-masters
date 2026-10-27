@@ -33,3 +33,34 @@ test('P&L: administración real reemplaza al presupuesto del mes', () => {
   assert.equal(ene.administracionReal, true);
   cerca(feb.estructura, 50);
 });
+
+test('vehículo: amortización desde la compra hasta el fin del contrato', async () => {
+  const { mesesAmortizacion, amortizacionMesUsd } = await import('../src/lib/vehiculo.js');
+  const v = { precioUsd: 1_300, residualUsd: 100, fechaCompra: '2027-01-15' };
+  assert.equal(mesesAmortizacion(v, '2027-12-31'), 12);
+  assert.equal(amortizacionMesUsd(v, '2027-12-31', '2026-12'), 0);
+  assert.equal(amortizacionMesUsd(v, '2027-12-31', '2027-01'), 100);
+  assert.equal(amortizacionMesUsd(v, '2027-12-31', '2027-12'), 100);
+  assert.equal(amortizacionMesUsd({ ...v, meses: 6 }, '2027-12-31', '2027-07'), 0);
+});
+
+test('up selling: líneas y reembolsables, fuera del ingreso del contrato', async () => {
+  const { upsellingPorMes } = await import('../src/lib/upselling.js');
+  const up = upsellingPorMes([
+    { mes: '2027-01', moneda: 'ARS', ingreso: 500, costo: 200 },
+    { mes: '2027-01', moneda: 'USD', ingreso: 2, costo: 1, tipo_cambio: 100 },
+  ]);
+  assert.deepEqual(up['2027-01'], { ingreso: 700, costo: 300, cantidad: 2 });
+  const periodos = periodosContrato(1, '2027-01-01');
+  const esc = completarEscenario({ factorPrecio: 1 });
+  const [ene] = calcularPnl({
+    periodos, personal: [], cargas: {}, fx: () => 1, escenarios: { arranque: esc, esperado: esc }, upselling: up,
+    gastos: { '2027-01': { compras: 0, sergio: 0, reembolsables: 1_000 } },
+    facturaciones: { '2027-01': { total: 9_000, factores: {}, reembolsables: { '1d': 1_000 }, facturaEmitidaEl: '2027-02-01', hasta: periodos[0].hasta } },
+  });
+  cerca(ene.ingresoContrato, 9_000 - 1_100);
+  cerca(ene.upsellingIngreso, 1_100 + 700);
+  cerca(ene.upsellingCosto, 1_000 + 300);
+  cerca(ene.upselling, 500);
+  cerca(ene.bruto, 9_000 - 1_100 + 500);
+});
