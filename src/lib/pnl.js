@@ -232,6 +232,10 @@ export function calcularPnl({ periodos, facturaciones, personal, cargas, escenar
     return {
       ...periodo,
       estado: estado(f),
+      facturaEmitidaEl: f?.facturaEmitidaEl || null,
+      cobradaEl: f?.cobradaEl || null,
+      facturaNumero: f?.facturaNumero ?? null,
+      fechaProforma: f?.fechaProforma ?? null,
       real,
       cargada: Boolean(f),
       factor,

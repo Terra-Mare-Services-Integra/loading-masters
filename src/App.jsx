@@ -15,7 +15,8 @@ import { ingresoArs, costoArs, upsellingPorMes } from './lib/upselling.js';
 import { RUBROS_VEHICULO, mesesAmortizacion, cuotaAmortizacionUsd, amortizacionMesUsd } from './lib/vehiculo.js';
 import { RUBROS_ADMIN, presupuestoMensualUsd, presupuestoRubroUsd, resumenAdmin, adminPorMes, copiarAlMes } from './lib/administracion.js';
 import { costoMensualUsd, cronogramaCuotas, primaAnualUsd } from './lib/seguros.js';
-import { periodosContrato, periodosSueldos, calcularPnl, costoCapitanesMes, participacionPorAnio, mesesEquivalentes } from './lib/pnl.js';
+import { periodosContrato, periodosSueldos, calcularPnl, costoCapitanesMes, participacionPorAnio, mesesEquivalentes, totalesPnl } from './lib/pnl.js';
+import { cobranza, cobrosEsperados, CATEGORIAS_COSTO, porAnio, acumulado, margen } from './lib/dashboard.js';
 
 const MENSUALES = CONTRATO_VMOS.items.filter((i) => i.tipo === 'mensual');
 const DOW = ['D', 'L', 'M', 'M', 'J', 'V', 'S'];
@@ -154,6 +155,7 @@ function Certificacion() {
       {vista === 'vehiculo' && <Vehiculo />}
       {vista === 'upselling' && <Upselling />}
       {vista === 'xubio' && <Xubio />}
+      {vista === 'dashboards' && <Dashboards />}
     </>
   );
 }
@@ -219,6 +221,14 @@ function useContrato() {
           amortizacionUsd,
           upselling: upsellingPorMes(upselling),
         });
+        // La proyección "pura" (sin nada real cargado), para comparar contra lo que va pasando.
+        const filasProyeccion = calcularPnl({
+          periodos, facturaciones: {}, personal, cargas, fx, escenarios: { arranque, esperado },
+          ajustes: ajustes.filter((a) => a.estado === 'aprobado'),
+          inicioSeguros: inicios?.seguros ?? null, inicioPleno: inicios?.operacionPlena ?? null,
+          costoSegurosUsd: seguros?.polizas ? costoMensualUsd(seguros.polizas) : null,
+          administracionUsd, vehiculoUsd, amortizacionUsd,
+        });
         // Administración y vehículo por mes calendario: gastos cargados, presupuesto y amortización.
         const mesesFijos = Object.fromEntries(['administracion', 'vehiculo'].map((area) => [area,
           periodosSueldos(esperado.mesesContrato).map((m) => {
@@ -250,7 +260,7 @@ function useContrato() {
               : { operacion: esc.operacionUsd * fx(m.mes) * meq, sergio: esc.sgFijoUsd * factor * fx(m.mes) * meq },
           };
         });
-        setDatos({ periodos, facturaciones, personal, filas, mesesSueldos, mesesOperacion, mesesFijos, refsFijos, finContrato, upselling, personasGastos: personasGastos ?? [], dolarUltimo: dolar.ultimo, inicios: inicios ?? {}, seguros: seguros ?? { cuotas: 10, polizas: [] }, arranque });
+        setDatos({ periodos, facturaciones, personal, filas, mesesSueldos, mesesOperacion, mesesFijos, refsFijos, finContrato, upselling, filasProyeccion, personasGastos: personasGastos ?? [], dolarUltimo: dolar.ultimo, inicios: inicios ?? {}, seguros: seguros ?? { cuotas: 10, polizas: [] }, arranque });
       })
       .catch((e) => setError(e.message));
   }, [version]);
@@ -1317,7 +1327,7 @@ const MOTIVOS = { ipc: 'IPC > 15 %', usd: 'dólar > 15 %', paritaria: 'acuerdo g
 // Arriba el análisis (Resultado y Dashboards); abajo los módulos donde se carga la información.
 const ANALISIS = [
   { id: 'resultado', nombre: 'Resultado', desc: 'P&L mes a mes: real y proyectado' },
-  { id: 'dashboards', nombre: 'Dashboards', desc: 'Gráficos y análisis del contrato' },
+  { id: 'dashboards', nombre: 'Dashboards', desc: 'Cobranza y vencidos, KPIs, resultado, costos y ajuste' },
 ];
 const MODULOS = [
   { id: 'facturaciones', nombre: 'Facturación', desc: 'Un mes por cajita: certificación, proforma, factura y cobro' },
@@ -1331,7 +1341,7 @@ const MODULOS = [
   { id: 'xubio', nombre: 'Xubio', desc: 'Facturas de compra del proyecto: actualizar y clasificar' },
   { id: 'seguros', nombre: 'Seguros', desc: 'RC y E&O: prima anual en cuotas, facturadas con los ítems 1a–1c' },
 ];
-const ACTIVOS = ['facturaciones', 'formula', 'resultado', 'sueldos', 'desempeno', 'operacion', 'vehiculo', 'administracion', 'seguros', 'upselling', 'xubio'];
+const ACTIVOS = ['dashboards', 'facturaciones', 'formula', 'resultado', 'sueldos', 'desempeno', 'operacion', 'vehiculo', 'administracion', 'seguros', 'upselling', 'xubio'];
 
 function Inicio({ onAbrir }) {
   return (
@@ -3172,5 +3182,375 @@ function ComprasXubio() {
         </div>
       </details>
     </>
+  );
+}
+
+// ─── Dashboards ──────────────────────────────────────────────────────────────
+
+// Colores por rol (validados para daltonismo en este orden; ver app.css .viz).
+const SERIE = (n) => `var(--serie-${n})`;
+const mill = (x) => `$ ${dec(x / 1e6, 1)} M`;
+const pct = (x) => (x === null || x === undefined ? '—' : `${dec(x * 100, 1)} %`);
+const mesCorto = (mes) => `${MESES[Number(mes.slice(5, 7)) - 1].slice(0, 3)} ${mes.slice(2, 4)}`;
+
+// Escala "linda" para el eje Y: 4-5 marcas redondas que cubren [min, max].
+function escalaY(min, max) {
+  const lo = Math.min(0, min);
+  const hi = Math.max(0, max) || 1;
+  const paso0 = (hi - lo) / 4;
+  const mag = 10 ** Math.floor(Math.log10(paso0));
+  const paso = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((p) => p >= paso0);
+  const desde = Math.floor(lo / paso) * paso;
+  const hasta = Math.ceil(hi / paso) * paso;
+  const marcas = [];
+  for (let v = desde; v <= hasta + paso / 2; v += paso) marcas.push(Math.round(v / paso) * paso);
+  return { desde, hasta, marcas };
+}
+
+/**
+ * Gráfico mensual con un solo eje: barras agrupadas y/o líneas por mes, con crosshair y tooltip.
+ * series: [{ id, nombre, color, tipo: 'barra' | 'linea', valores: number[] }]; atenuar[i]: mes proyectado.
+ */
+// Ancho real del contenedor, para dibujar en píxeles (el texto no se achica en los gráficos angostos).
+function useAncho(inicial = 720) {
+  const ref = useRef(null);
+  const [ancho, setAncho] = useState(inicial);
+  useEffect(() => {
+    if (!ref.current) return undefined;
+    const ro = new ResizeObserver(([e]) => setAncho(Math.max(Math.round(e.contentRect.width), 280)));
+    ro.observe(ref.current);
+    return () => ro.disconnect();
+  }, []);
+  return [ref, ancho];
+}
+
+function GraficoMensual({ meses, series, formato, atenuar = [], umbral, alto = 260 }) {
+  const [hover, setHover] = useState(null);
+  const [ref, W] = useAncho();
+  const H = alto;
+  const m = { t: 12, r: 12, b: 28, l: 64 };
+  const valores = series.flatMap((s) => s.valores).filter((v) => v !== null && Number.isFinite(v));
+  if (umbral) valores.push(umbral.valor);
+  const { desde, hasta, marcas } = escalaY(Math.min(...valores, 0), Math.max(...valores, 0));
+  const x0 = m.l;
+  const ancho = W - m.l - m.r;
+  // (ancho del área de datos; las marcas del eje X se espacian según él)
+  const paso = ancho / Math.max(meses.length, 1);
+  const y = (v) => m.t + (H - m.t - m.b) * (1 - (v - desde) / (hasta - desde || 1));
+  const barras = series.filter((s) => s.tipo === 'barra');
+  const lineas = series.filter((s) => s.tipo === 'linea');
+  const anchoBarra = Math.max(Math.min((paso * 0.7) / Math.max(barras.length, 1) - 2, 22), 2);
+  const cx = (i) => x0 + paso * (i + 0.5);
+  const cadaN = Math.ceil(meses.length / Math.max(Math.floor(ancho / 64), 2));
+
+  return (
+    <div className="viz-grafico" ref={ref} onMouseLeave={() => setHover(null)}>
+      <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label={series.map((s) => s.nombre).join(', ')}
+        onMouseMove={(e) => {
+          const r = e.currentTarget.getBoundingClientRect();
+          const i = Math.floor((((e.clientX - r.left) / r.width) * W - x0) / paso);
+          setHover(i >= 0 && i < meses.length ? i : null);
+        }}>
+        {marcas.map((v) => (
+          <g key={v}>
+            <line x1={x0} x2={W - m.r} y1={y(v)} y2={y(v)} className={v === 0 ? 'viz-base' : 'viz-grilla'} />
+            <text x={x0 - 8} y={y(v) + 4} textAnchor="end" className="viz-eje">{formato(v)}</text>
+          </g>
+        ))}
+        {umbral && (
+          <g>
+            <line x1={x0} x2={W - m.r} y1={y(umbral.valor)} y2={y(umbral.valor)} className="viz-umbral" />
+            <text x={W - m.r} y={y(umbral.valor) + 14} textAnchor="end" className="viz-eje">{umbral.nombre}</text>
+          </g>
+        )}
+        {hover !== null && <rect x={x0 + paso * hover} y={m.t} width={paso} height={H - m.t - m.b} className="viz-hover" />}
+        {barras.map((s, k) => s.valores.map((v, i) => {
+          if (v === null || !v) return null;
+          const bx = cx(i) - (barras.length * (anchoBarra + 2)) / 2 + k * (anchoBarra + 2) + 1;
+          const y1 = y(Math.max(v, 0));
+          const h = Math.max(Math.abs(y(v) - y(0)), 1);
+          return <rect key={`${s.id}-${i}`} x={bx} y={y1} width={anchoBarra} height={h} rx={Math.min(3, anchoBarra / 2)} fill={s.color} opacity={atenuar[i] ? 0.4 : 1} />;
+        }))}
+        {lineas.map((s) => {
+          const pts = s.valores.map((v, i) => (v === null ? null : [cx(i), y(v)]));
+          const d = pts.reduce((acc, p, i) => (p ? `${acc}${acc && pts[i - 1] ? 'L' : 'M'}${p[0]},${p[1]}` : acc), '');
+          return (
+            <g key={s.id}>
+              <path d={d} fill="none" stroke={s.color} strokeWidth="2" strokeDasharray={s.punteada ? '5 4' : undefined} strokeLinejoin="round" />
+              {/* Con pocos meses, cada punto se marca (una línea de un solo punto no se vería). */}
+              {meses.length <= 6 && pts.map((p, i) => p && i !== hover && <circle key={i} cx={p[0]} cy={p[1]} r="4" fill={s.color} className="viz-punto" />)}
+              {hover !== null && pts[hover] && <circle cx={pts[hover][0]} cy={pts[hover][1]} r="4.5" fill={s.color} className="viz-punto" />}
+            </g>
+          );
+        })}
+        {meses.map((mes, i) => (i % cadaN === 0 ? <text key={mes} x={cx(i)} y={H - 8} textAnchor="middle" className="viz-eje">{mesCorto(mes)}</text> : null))}
+      </svg>
+      {hover !== null && (
+        <div className="viz-tooltip" style={{ left: `${Math.min(Math.max((cx(hover) / W) * 100, 12), 78)}%` }}>
+          <div className="viz-tooltip-titulo">{nombreMes(meses[hover])}{atenuar[hover] ? ' · proyectado' : ''}</div>
+          {series.map((s) => (
+            <div key={s.id} className="viz-tooltip-fila">
+              <span className="viz-muestra" style={{ background: s.color }} />{s.nombre}<span className="mono">{s.valores[hover] === null ? '—' : formato(s.valores[hover])}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      <Leyenda items={series.map((s) => ({ nombre: s.nombre, color: s.color, punteada: s.punteada }))} extra={atenuar.some(Boolean) ? 'Barras claras: proyectado' : null} />
+    </div>
+  );
+}
+
+function Leyenda({ items, extra }) {
+  if (items.length < 2 && !extra) return null;
+  return (
+    <div className="viz-leyenda">
+      {items.length > 1 && items.map((it) => <span key={it.nombre}><span className={`viz-muestra ${it.punteada ? 'punteada' : ''}`} style={{ background: it.color }} />{it.nombre}</span>)}
+      {extra && <span className="ayuda">{extra}</span>}
+    </div>
+  );
+}
+
+// Barra horizontal partida en segmentos (con 2px de separación) y tooltip por segmento.
+function BarraSegmentos({ segmentos, formato }) {
+  const total = segmentos.reduce((s, x) => s + Math.max(x.valor, 0), 0);
+  const [hover, setHover] = useState(null);
+  return (
+    <div className="viz-segmentos" onMouseLeave={() => setHover(null)}>
+      <div className="viz-segmentos-barra">
+        {segmentos.filter((s) => s.valor > 0).map((s) => (
+          <div key={s.nombre} style={{ flexGrow: s.valor, background: s.color }} onMouseEnter={() => setHover(s)} title={`${s.nombre}: ${formato(s.valor)}`} />
+        ))}
+        {total === 0 && <div className="viz-vacio">Sin datos</div>}
+      </div>
+      {hover && <div className="ayuda">{hover.nombre}: <span className="mono">{formato(hover.valor)}</span> ({pct(hover.valor / total)})</div>}
+    </div>
+  );
+}
+
+function Kpi({ titulo, valor, detalle, estado }) {
+  return (
+    <div className={`viz-kpi ${estado ?? ''}`}>
+      <div className="viz-kpi-titulo">{titulo}</div>
+      <div className="viz-kpi-valor">{valor}</div>
+      {detalle && <div className="viz-kpi-detalle">{detalle}</div>}
+    </div>
+  );
+}
+
+const ESTADO_FACTURA = {
+  cobrada: { texto: 'Cobrada', icono: '✓', clase: 'bien' },
+  a_vencer: { texto: 'A vencer', icono: '○', clase: 'atencion' },
+  vencida: { texto: 'Vencida', icono: '!', clase: 'critico' },
+};
+
+function Dashboards() {
+  const { datos, error } = useContrato();
+  const [anio, setAnio] = useState('total');
+  const [series, setSeries] = useState(null);
+  const hoy = hoyIso();
+
+  // Índices para el gráfico del ajuste: desde el inicio del contrato hasta hoy (IPC con n-2).
+  useEffect(() => {
+    const meses = [];
+    for (let mes = CONTRATO_VMOS.inicioComputo; mes <= hoy.slice(0, 7); mes = mesMenos(mes, -1)) meses.push(mes);
+    db.leerSeriesRango(meses, meses.map((m) => mesMenos(m, 2)))
+      .then((s) => setSeries({ meses, ...s }))
+      .catch(() => setSeries({ meses, ipc: {}, usd: {} }));
+  }, [hoy]);
+
+  if (!datos) return <main>{error ? <p className="aviso error">Error: {error}</p> : 'Cargando…'}</main>;
+
+  const anios = [...new Set(datos.filas.map((f) => f.mes.slice(0, 4)))];
+  const enAnio = (f) => anio === 'total' || f.mes.startsWith(anio);
+  const filas = datos.filas.filter(enAnio);
+  const proy = datos.filasProyeccion.filter(enAnio);
+  const meses = filas.map((f) => f.mes);
+  const atenuar = filas.map((f) => !f.real);
+  const t = totalesPnl(filas);
+  const tReal = totalesPnl(filas.filter((f) => f.real));
+  const cob = cobranza(datos.filas, hoy);
+  const esperados = cobrosEsperados(datos.filas).filter((e) => e.cobro >= hoy).slice(0, 6);
+
+  // Operación por rubro: cargado a mano y traído de Xubio, en los meses del filtro.
+  const gastosOp = datos.mesesOperacion.filter((m) => anio === 'total' || m.mes.startsWith(anio)).flatMap((m) => m.gastos).filter((g) => !g.reembolsable);
+  const rubrosOp = RUBROS.map((r) => {
+    const gs = gastosOp.filter((g) => g.rubro === r.id);
+    const xubio = gs.filter((g) => g.origen === 'xubio').reduce((s, g) => s + montoArs(g), 0);
+    const manual = gs.filter((g) => g.origen !== 'xubio').reduce((s, g) => s + montoArs(g), 0);
+    return { ...r, xubio, manual, total: xubio + manual };
+  }).filter((r) => r.total > 0).sort((a, b) => b.total - a.total);
+  const maxRubro = Math.max(...rubrosOp.map((r) => r.total), 1);
+
+  // Composición de costos por año (o del año elegido).
+  const costosAnio = porAnio(filas, CATEGORIAS_COSTO.map(([k]) => k));
+
+  // Ajuste: variación acumulada de IPC y dólar contra la base del contrato.
+  const base = CONTRATO_VMOS.ajuste.base;
+  const varIpc = series ? series.meses.map((m) => (series.ipc[mesMenos(m, 2)] ? series.ipc[mesMenos(m, 2)].valor / base.ipc - 1 : null)) : [];
+  const varUsd = series ? series.meses.map((m) => (series.usd[m] ? series.usd[m].valor / base.usd - 1 : null)) : [];
+
+  return (
+    <main className="viz">
+      <section className="encabezado">
+        <div>
+          <h1>Dashboards.</h1>
+          <div className="filete" />
+          <p className="aviso">Lo facturado es real; el resto es la proyección del Resultado. Importes en pesos; la cobranza, con IVA.</p>
+        </div>
+        <div className="filtros">
+          <div className="segmentado">
+            {anios.map((a) => <button key={a} type="button" className={anio === a ? 'activo' : ''} onClick={() => setAnio(a)}>{a}</button>)}
+            <button type="button" className={anio === 'total' ? 'activo' : ''} onClick={() => setAnio('total')}>Total</button>
+          </div>
+        </div>
+      </section>
+
+      <section className="tarjeta">
+        <div className="overline">Facturación y cobranza · al {fecha(hoy)}</div>
+        <div className="viz-kpis">
+          <Kpi titulo="Facturado" valor={mill(cob.facturado)} detalle={`${cob.facturas.length} factura${cob.facturas.length === 1 ? '' : 's'}`} />
+          <Kpi titulo="Cobrado" valor={mill(cob.cobrado)} detalle={cob.facturado ? `${pct(cob.cobrado / cob.facturado)} de lo facturado` : null} />
+          <Kpi titulo="Pendiente de cobro" valor={mill(cob.pendiente)} detalle={`A vencer ${mill(cob.aVencer)}`} />
+          <Kpi titulo="Vencido (past due)" valor={mill(cob.vencido)} estado={cob.vencido > 0 ? 'critico' : 'bien'}
+            detalle={cob.vencido > 0 ? `${cob.facturas.filter((f) => f.estado === 'vencida').length} factura(s) vencida(s)` : 'Nada vencido'} />
+          <Kpi titulo="Días promedio de cobro" valor={cob.diasPromedioCobro === null ? '—' : dec(cob.diasPromedioCobro, 0)} detalle="desde la factura (plazo: 30)" />
+        </div>
+        <div className="viz-fila">
+          <div>
+            <div className="viz-subtitulo">Antigüedad de lo pendiente</div>
+            <BarraSegmentos formato={mill} segmentos={[
+              { nombre: 'A vencer', valor: cob.aVencer, color: 'var(--estado-bien)' },
+              ...cob.tramos.map((tr, i) => ({ nombre: `Vencido ${tr.nombre}`, valor: tr.monto, color: ['var(--estado-atencion)', 'var(--estado-serio)', 'var(--estado-critico)'][i] })),
+            ]} />
+            <table className="tabla-ajuste viz-tabla">
+              <tbody>
+                <tr><td>A vencer</td><td className="n mono">{mill(cob.aVencer)}</td></tr>
+                {cob.tramos.map((tr) => <tr key={tr.id}><td>Vencido {tr.nombre}</td><td className="n mono">{mill(tr.monto)}{tr.cantidad ? ` · ${tr.cantidad}` : ''}</td></tr>)}
+              </tbody>
+            </table>
+          </div>
+          <div>
+            <div className="viz-subtitulo">Próximos cobros esperados</div>
+            <table className="tabla-ajuste viz-tabla">
+              <thead><tr><th>Mes</th><th>Factura aprox.</th><th>Cobro aprox.</th><th className="n">Con IVA</th></tr></thead>
+              <tbody>
+                {cob.facturas.filter((f) => f.estado === 'a_vencer').map((f) => (
+                  <tr key={f.mes}><td className="capitalizar">{f.nombre}</td><td className="mono">{fecha(f.emitida)}</td><td className="mono">{fecha(f.vence)}</td><td className="n mono">{mill(f.conIva)}</td></tr>
+                ))}
+                {esperados.map((e) => (
+                  <tr key={e.mes} className="proyectado"><td className="capitalizar">{e.nombre}</td><td className="mono">{fecha(e.factura)}</td><td className="mono">{fecha(e.cobro)}</td><td className="n mono">{mill(e.conIva)}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div className="viz-subtitulo">Facturas emitidas</div>
+        <div className="tabla-scroll">
+          <table className="tabla-ajuste viz-tabla">
+            <thead><tr><th>Mes</th><th>Factura</th><th>Emitida</th><th>Vence</th><th>Cobrada</th><th className="n">Con IVA</th><th>Estado</th></tr></thead>
+            <tbody>
+              {cob.facturas.length === 0 && <tr><td colSpan={7} className="aviso">Todavía no hay facturas emitidas.</td></tr>}
+              {cob.facturas.map((f) => {
+                const e = ESTADO_FACTURA[f.estado];
+                return (
+                  <tr key={f.mes}>
+                    <td className="capitalizar">{f.nombre}</td><td className="mono">{f.numero ?? '—'}</td><td className="mono">{fecha(f.emitida)}</td>
+                    <td className="mono">{fecha(f.vence)}</td><td className="mono">{f.cobrada ? fecha(f.cobrada) : '—'}</td><td className="n mono">{mill(f.conIva)}</td>
+                    <td><span className={`viz-estado ${e.clase}`}><span aria-hidden="true">{e.icono}</span> {e.texto}{f.atraso ? ` · ${f.atraso} días` : ''}</span></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="tarjeta">
+        <div className="overline">Indicadores {anio === 'total' ? 'del contrato' : anio}</div>
+        <div className="viz-kpis">
+          <Kpi titulo="Ingresos" valor={mill(t.ingreso)} detalle={`Real ${mill(tReal.ingreso)}`} />
+          <Kpi titulo="Resultado bruto" valor={mill(t.bruto)} detalle={`Real ${mill(tReal.bruto)}`} />
+          <Kpi titulo="Margen" valor={pct(margen(t.bruto, t.ingreso))} detalle={`Real ${pct(margen(tReal.bruto, tReal.ingreso))}`} />
+          <Kpi titulo="Generación TM" valor={mill(t.generacion)} detalle={`Real ${mill(tReal.generacion)}`} />
+          <Kpi titulo="Participación de Sergio" valor={mill(t.participacion)} detalle="provisión (se paga al cierre del balance)" />
+        </div>
+      </section>
+
+      <section className="tarjeta">
+        <div className="overline">Resultado mes a mes</div>
+        <GraficoMensual meses={meses} atenuar={atenuar} formato={mill} series={[
+          { id: 'ing', nombre: 'Ingresos', color: SERIE(1), tipo: 'barra', valores: filas.map((f) => f.ingreso) },
+          { id: 'cos', nombre: 'Costos', color: SERIE(2), tipo: 'barra', valores: filas.map((f) => f.ingreso - f.bruto) },
+          { id: 'res', nombre: 'Resultado bruto', color: 'var(--viz-tinta)', tipo: 'linea', valores: filas.map((f) => f.bruto) },
+        ]} />
+      </section>
+
+      <div className="viz-fila">
+        <section className="tarjeta">
+          <div className="overline">Margen mensual</div>
+          <GraficoMensual meses={meses} formato={pct} alto={220} series={[
+            { id: 'mg', nombre: 'Margen (resultado bruto / ingresos)', color: SERIE(1), tipo: 'linea', valores: filas.map((f) => margen(f.bruto, f.ingreso)) },
+          ]} />
+        </section>
+        <section className="tarjeta">
+          <div className="overline">Real contra proyectado · generación acumulada</div>
+          <GraficoMensual meses={meses} formato={mill} alto={220} series={[
+            { id: 'act', nombre: 'Actual (real + proyectado)', color: SERIE(1), tipo: 'linea', valores: acumulado(filas, 'generacion').map((x) => x.valor) },
+            { id: 'pro', nombre: 'Proyección original', color: SERIE(2), tipo: 'linea', punteada: true, valores: acumulado(proy, 'generacion').map((x) => x.valor) },
+          ]} />
+        </section>
+      </div>
+
+      <section className="tarjeta">
+        <div className="overline">En qué se va la plata · costos por año</div>
+        {Object.entries(costosAnio).map(([a, c]) => (
+          <div key={a} className="viz-anio">
+            <div className="viz-anio-nombre">{a}</div>
+            <BarraSegmentos formato={mill} segmentos={CATEGORIAS_COSTO.map(([k, n], i) => ({ nombre: n, valor: c[k], color: SERIE(i + 1) }))} />
+          </div>
+        ))}
+        <Leyenda items={CATEGORIAS_COSTO.map(([, n], i) => ({ nombre: n, color: SERIE(i + 1) }))} />
+        <div className="tabla-scroll">
+          <table className="tabla-ajuste viz-tabla">
+            <thead><tr><th>Año</th>{CATEGORIAS_COSTO.map(([k, n]) => <th key={k} className="n">{n}</th>)}</tr></thead>
+            <tbody>
+              {Object.entries(costosAnio).map(([a, c]) => (
+                <tr key={a}><td>{a}</td>{CATEGORIAS_COSTO.map(([k]) => <td key={k} className="n mono">{mill(c[k])}</td>)}</tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <div className="viz-fila">
+        <section className="tarjeta">
+          <div className="overline">Operación por rubro · sin reembolsables</div>
+          {rubrosOp.length === 0 && <p className="aviso">Todavía no hay gastos de operación cargados {anio === 'total' ? '' : `en ${anio}`}.</p>}
+          {rubrosOp.map((r) => (
+            <div key={r.id} className="viz-rubro">
+              <div className="viz-rubro-nombre">{r.nombre}</div>
+              <div className="viz-rubro-barra" title={`Xubio ${mill(r.xubio)} · cargado a mano ${mill(r.manual)}`}>
+                {r.xubio > 0 && <div style={{ width: `${(r.xubio / maxRubro) * 100}%`, background: SERIE(1) }} />}
+                {r.manual > 0 && <div style={{ width: `${(r.manual / maxRubro) * 100}%`, background: SERIE(3) }} />}
+              </div>
+              <div className="viz-rubro-valor mono">{mill(r.total)}</div>
+            </div>
+          ))}
+          {rubrosOp.length > 0 && <Leyenda items={[{ nombre: 'Traído de Xubio', color: SERIE(1) }, { nombre: 'Cargado a mano', color: SERIE(3) }]} />}
+        </section>
+        <section className="tarjeta">
+          <div className="overline">Ajuste de precios · variación contra la base</div>
+          {series ? (
+            <GraficoMensual meses={series.meses} formato={pct} alto={220}
+              umbral={{ valor: CONTRATO_VMOS.ajuste.disparadores.ipcAcumulado, nombre: 'Disparador 15 %' }}
+              series={[
+                { id: 'ipc', nombre: 'IPC (n-2)', color: SERIE(1), tipo: 'linea', valores: varIpc },
+                { id: 'usd', nombre: 'Dólar BNA', color: SERIE(2), tipo: 'linea', valores: varUsd },
+              ]} />
+          ) : 'Cargando índices…'}
+          <p className="ayuda">Base del contrato: IPC de agosto 2026 y dólar del 01/10/2026. Superar el 15 % habilita pedir el ajuste en la ventana del 1 al 10.</p>
+        </section>
+      </div>
+    </main>
   );
 }

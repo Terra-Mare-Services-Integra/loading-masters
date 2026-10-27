@@ -50,10 +50,10 @@ export async function listarFacturaciones() {
 // Facturaciones de todos los meses, con lo necesario para el estado y el P&L.
 export async function listarFacturacionesPorMes() {
   const filas = ok(await supabase.from('certificaciones')
-    .select('id, nombre, mes, desde, hasta, total, factores, reembolsables, factura_emitida_el, cobrada_el, observaciones, numero'));
+    .select('id, nombre, mes, desde, hasta, total, factores, reembolsables, fecha_proforma, factura_numero, factura_emitida_el, cobrada_el, observaciones, numero'));
   return Object.fromEntries(filas.map((f) => [f.mes, {
     id: f.id, nombre: f.nombre, mes: f.mes, desde: f.desde, hasta: f.hasta, total: Number(f.total),
-    factores: f.factores, reembolsables: f.reembolsables ?? {}, facturaEmitidaEl: f.factura_emitida_el, cobradaEl: f.cobrada_el,
+    factores: f.factores, reembolsables: f.reembolsables ?? {}, fechaProforma: f.fecha_proforma, facturaNumero: f.factura_numero || null, facturaEmitidaEl: f.factura_emitida_el, cobradaEl: f.cobrada_el,
     observaciones: f.observaciones, numero: f.numero,
   }]));
 }
