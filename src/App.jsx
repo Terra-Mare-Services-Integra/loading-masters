@@ -690,6 +690,7 @@ const pctSigno = (x) => {
   const v = Math.round(x * 10000) / 100 || 0; // || 0 evita "-0,00"
   return `${v >= 0 ? '+' : ''}${v.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} %`;
 };
+const variacion = (x) => (x === null || x === undefined ? '—' : pctSigno(x));
 const dec = (x, n = 2) => x.toLocaleString('es-AR', { minimumFractionDigits: n, maximumFractionDigits: n });
 const ESTADO_VENTANA = { abierta: 'Abierta hoy', cerrada: 'Cerrada', futura: 'Próxima' };
 const ESTADO_PEDIDO = { solicitado: 'Pedido enviado', aprobado: 'Aprobado por VMOS', rechazado: 'Rechazado por VMOS' };
@@ -806,8 +807,8 @@ function VentanaAjuste({ ventana, aprobados, pedido, onCambioAjustes }) {
   }
 
   const disparadoresTabla = [
-    ['ipc', 'IPC acumulado mayor a 15 %', ev.variaciones ? pctSigno(ev.variaciones.ipc) : '—'],
-    ['usd', 'Dólar acumulado mayor a 15 %', ev.variaciones ? pctSigno(ev.variaciones.usd) : '—'],
+    ['ipc', 'IPC acumulado mayor a 15 %', variacion(ev.variaciones.ipc)],
+    ['usd', 'Dólar acumulado mayor a 15 %', variacion(ev.variaciones.usd)],
     ['paritaria', 'Acuerdo gremial avalado por VMOS', usados.paritaria ? 'Sí' : 'No'],
     ['plazo', '6 meses desde la última actualización', `${ev.mesesDesdeBase} ${ev.mesesDesdeBase === 1 ? 'mes' : 'meses'}`],
   ];
@@ -851,7 +852,7 @@ function VentanaAjuste({ ventana, aprobados, pedido, onCambioAjustes }) {
                 <td className="n mono">{w} %</td>
                 <td className="n mono">{dec(ev.base.indices[k], d)}</td>
                 <td className="n mono">{usados[k] ? dec(usados[k], d) : '—'}</td>
-                <td className="n mono">{ev.variaciones ? pctSigno(ev.variaciones[k]) : '—'}</td>
+                <td className="n mono">{variacion(ev.variaciones[k])}</td>
               </tr>
             ))}
           </tbody>
@@ -864,7 +865,7 @@ function VentanaAjuste({ ventana, aprobados, pedido, onCambioAjustes }) {
               <tr key={k} className={ev.motivos.includes(k) ? 'cumple' : ''}>
                 <td>{n}</td>
                 <td className="n mono">{v}</td>
-                <td className="n">{ev.motivos.includes(k) ? 'Sí' : 'No'}</td>
+                <td className="n">{ev.motivos.includes(k) ? 'Sí' : (k === 'ipc' || k === 'usd') && ev.variaciones[k] === null ? 'Falta el dato' : 'No'}</td>
               </tr>
             ))}
           </tbody>
@@ -887,7 +888,9 @@ function VentanaAjuste({ ventana, aprobados, pedido, onCambioAjustes }) {
       <p className={`conclusion ${ev.habilitado ? 'si' : ''}`}>
         {ev.habilitado
           ? 'Se cumple al menos un disparador: corresponde pedir la revisión en esta ventana.'
-          : 'No se cumple ningún disparador: no corresponde pedir la revisión en esta ventana.'}
+          : ev.variaciones.ipc === null || ev.variaciones.usd === null
+            ? `Con los datos cargados no se cumple ningún disparador. Falta ${[ev.variaciones.ipc === null && 'el IPC', ev.variaciones.usd === null && 'el dólar'].filter(Boolean).join(' y ')} para terminar de evaluar.`
+            : 'No se cumple ningún disparador: no corresponde pedir la revisión en esta ventana.'}
       </p>
 
       {!pedido && ev.habilitado && ev.completo && (
@@ -1041,8 +1044,8 @@ function SeguimientoFormula() {
                   <td className="n mono">{esBase ? '20,0 %' : aporte('ipc', 0.2)}</td>
                   <td className="n mono">{esBase ? '10,0 %' : aporte('usd', 0.1)}</td>
                   <td className="n mono fuerte">{esBase ? '100,0 %' : ev.completo ? `${dec(ev.factor * 100, 1)} %` : '—'}</td>
-                  <td className="n mono">{!esBase && ev.variaciones ? pctSigno(ev.variaciones.ipc) : !esBase && valores.ipc ? pctSigno(valores.ipc / b.ipc - 1) : '—'}</td>
-                  <td className="n mono">{!esBase && ev.variaciones ? pctSigno(ev.variaciones.usd) : !esBase && valores.usd ? pctSigno(valores.usd / b.usd - 1) : '—'}</td>
+                  <td className="n mono">{esBase ? '—' : variacion(ev.variaciones.ipc)}</td>
+                  <td className="n mono">{esBase ? '—' : variacion(ev.variaciones.usd)}</td>
                   <td className="n mono">{ev.mesesDesdeBase}</td>
                   <td>
                     {pedido ? <span className={`chip pedido-${pedido.estado}`}>{ESTADO_PEDIDO[pedido.estado]}</span>

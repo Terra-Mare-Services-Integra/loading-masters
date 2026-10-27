@@ -96,3 +96,13 @@ test('precios por fecha y certificación que cruza el inicio de un ajuste', () =
   assert.equal(cert.items[0].importe, 95_899_108.14); // 10/30 a precio base + 10/31 a precio ajustado
   assert.equal(cert.items[0].preciosDistintos.length, 2);
 });
+
+test('con índices incompletos igual muestra cada variación y evalúa los disparadores', () => {
+  const e = evaluarVentana({ mes: '2026-11', indices: { mo: 7_000_000, ipc: 12_514.1508 } });
+  assert.equal(e.completo, false);
+  assert.equal(e.variaciones.mo.toFixed(4), '0.0969');
+  assert.equal(e.variaciones.ipc.toFixed(4), '0.0193');
+  assert.equal(e.variaciones.usd, null);
+  assert.equal(e.factor, undefined);
+  assert.deepEqual(evaluarVentana({ mes: '2026-12', indices: { ipc: 12_276.8 * 1.16 } }).motivos, ['ipc']);
+});

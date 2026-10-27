@@ -108,19 +108,21 @@ export function estadoVentana(ventana, hoy) {
 export function evaluarVentana({ mes, indices, aprobados = [], paritaria = false }, contrato = CONTRATO_VMOS) {
   const base = baseVigente(aprobados, mes, contrato);
   const mesesDesdeBase = mesesEntre(base.mes, mes);
-  const completo = ['mo', 'ipc', 'usd'].every((k) => Number(indices?.[k]) > 0);
-  const resultado = { mes, rigeDesde: `${mesSiguiente(mes)}-01`, base, mesesDesdeBase, completo };
-  if (!completo) {
-    const motivos = [...(paritaria ? ['paritaria'] : []), ...(mesesDesdeBase >= contrato.ajuste.disparadores.meses ? ['plazo'] : [])];
-    return { ...resultado, motivos, habilitado: motivos.length > 0 };
-  }
-  const d = disparadores(indices, base.indices, { mesesDesdeUltima: mesesDesdeBase, paritaria }, contrato.ajuste);
+  const tiene = (k) => Number(indices?.[k]) > 0;
+  const completo = ['mo', 'ipc', 'usd'].every(tiene);
+  // Cada variación y cada disparador se evalúan con lo que haya; el factor necesita los tres índices.
+  const variaciones = Object.fromEntries(['mo', 'ipc', 'usd'].map((k) => [k, tiene(k) ? indices[k] / base.indices[k] - 1 : null]));
+  const d = contrato.ajuste.disparadores;
+  const motivos = [];
+  if (variaciones.ipc !== null && variaciones.ipc > d.ipcAcumulado) motivos.push('ipc');
+  if (variaciones.usd !== null && variaciones.usd > d.usdAcumulado) motivos.push('usd');
+  if (paritaria) motivos.push('paritaria');
+  if (mesesDesdeBase >= d.meses) motivos.push('plazo');
+  const resultado = { mes, rigeDesde: `${mesSiguiente(mes)}-01`, base, mesesDesdeBase, completo, variaciones, motivos, habilitado: motivos.length > 0 };
+  if (!completo) return resultado;
   const factor = factorAjuste(indices, base.indices, contrato.ajuste);
   return {
     ...resultado,
-    variaciones: { mo: indices.mo / base.indices.mo - 1, ipc: d.varIpc, usd: d.varUsd },
-    motivos: d.motivos,
-    habilitado: d.habilitado,
     factor,
     precios: Object.fromEntries(Object.entries(base.precios).map(([c, p]) => [c, redondear(p * factor)])),
   };

@@ -174,3 +174,6 @@ label.check input{ min-height:0; width:16px; height:16px; }
 .tabla-seguimiento .chip{ margin-left:8px; }
 .tabla-seguimiento td:last-child .chip{ margin-left:0; }
 @media (max-width: 900px){ .vistas{ padding:0 16px; } }
+
+.ventana-cabeza .chips{ align-self:flex-start; }
+.chip{ white-space:nowrap; display:inline-block; line-height:1.4; }
