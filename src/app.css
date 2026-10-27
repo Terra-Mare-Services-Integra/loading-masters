@@ -192,3 +192,7 @@ label.check input{ min-height:0; width:16px; height:16px; }
 .enviada-resumen.pendiente{ color:#C97A16; font-weight:500; }
 .historial td.mono, .historial td.n{ white-space:nowrap; }
 .historial .tabla-scroll{ margin-top:12px; border:0; }
+
+/* Valores con origen al pasar el mouse */
+.con-origen{ text-decoration:underline dotted var(--tm-blue-light); text-underline-offset:3px; cursor:help; }
+td.con-origen input{ cursor:text; }

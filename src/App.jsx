@@ -770,6 +770,27 @@ const pctSigno = (x) => {
 };
 const variacion = (x) => (x === null || x === undefined ? '—' : pctSigno(x));
 const dec = (x, n = 2) => x.toLocaleString('es-AR', { minimumFractionDigits: n, maximumFractionDigits: n });
+// De qué fecha y fuente es cada valor de la fórmula (se muestra al pasar el mouse).
+function origenBase(base, k) {
+  if (base.origen === 'contrato') return CONTRATO_VMOS.ajuste.fechasBase[k];
+  return {
+    mo: `Básico Capitán de Ultramar de ${nombreMes(base.mes)} (del ajuste aprobado en esa ventana)`,
+    ipc: `IPC Nivel General Nacional de ${nombreMes(mesMenos(base.mes, 2))} (n-2 del ajuste de ${nombreMes(base.mes)})`,
+    usd: `Dólar BNA divisa vendedor del primer día hábil de ${nombreMes(base.mes)} (del ajuste aprobado)`,
+  }[k];
+}
+function origenActual(mes, k, ipc, usd) {
+  return {
+    mo: `Básico Capitán de Ultramar de ${nombreMes(mes)}, cargado a mano`,
+    ipc: ipc
+      ? `IPC Nivel General Nacional de ${nombreMes(ipc.mes)}, ${ipc.fuente ?? 'INDEC'} (n-2 de ${nombreMes(mes)})`
+      : `IPC Nivel General Nacional de ${nombreMes(mesMenos(mes, 2))} (n-2): todavía no publicado`,
+    usd: usd
+      ? `Dólar BNA divisa vendedor del ${fecha(usd.fecha)}, primer día hábil de ${nombreMes(mes)} (vía BCRA)`
+      : `Dólar BNA divisa vendedor del primer día hábil de ${nombreMes(mes)}: todavía no disponible`,
+  }[k];
+}
+
 const ESTADO_VENTANA = { abierta: 'Abierta hoy', cerrada: 'Cerrada', futura: 'Próxima' };
 const ESTADO_PEDIDO = { solicitado: 'Pedido enviado', aprobado: 'Aprobado por VMOS', rechazado: 'Rechazado por VMOS' };
 
@@ -928,8 +949,10 @@ function VentanaAjuste({ ventana, aprobados, pedido, onCambioAjustes }) {
               <tr key={k}>
                 <td>{n}</td>
                 <td className="n mono">{w} %</td>
-                <td className="n mono">{dec(ev.base.indices[k], d)}</td>
-                <td className="n mono">{usados[k] ? dec(usados[k], d) : '—'}</td>
+                <td className="n mono"><span className="con-origen" title={origenBase(ev.base, k)}>{dec(ev.base.indices[k], d)}</span></td>
+                <td className="n mono">
+                  <span className="con-origen" title={origenActual(ventana.mes, k, series?.ipc, series?.usd)}>{usados[k] ? dec(usados[k], d) : '—'}</span>
+                </td>
                 <td className="n mono">{variacion(ev.variaciones[k])}</td>
               </tr>
             ))}
@@ -1085,9 +1108,9 @@ function SeguimientoFormula() {
           <tbody>
             <tr className="historia">
               <td>{nombreMes(h.mes)} <span className="ayuda">precios originales</span></td>
-              <td className="n mono">{dec(h.indices.mo, 0)}</td>
-              <td className="n mono">{dec(h.indices.ipc, 1)}</td>
-              <td className="n mono">{dec(h.indices.usd, 1)}</td>
+              <td className="n mono con-origen" title="Básico Capitán de Ultramar de marzo 2026 (Excel Formula de ajuste)">{dec(h.indices.mo, 0)}</td>
+              <td className="n mono con-origen" title="IPC Nivel General Nacional de enero 2026, INDEC (n-2 de marzo)">{dec(h.indices.ipc, 1)}</td>
+              <td className="n mono con-origen" title="Dólar BNA divisa vendedor del 02/03/2026, primer día hábil de marzo">{dec(h.indices.usd, 1)}</td>
               <td colSpan={8} className="ayuda">Paso a oct-26: índice {dec(factorHistorico * 100, 1)} % → precios de la oferta</td>
             </tr>
             {meses.map((mes) => {
@@ -1106,16 +1129,16 @@ function SeguimientoFormula() {
               return (
                 <tr key={mes} className={esBase ? 'base' : ''}>
                   <td>{nombreMes(mes)}{esBase && <span className="chip">Base</span>}</td>
-                  <td className="n">
+                  <td className="n con-origen" title={esBase && ev.base.origen === 'contrato' ? origenBase(ev.base, 'mo') : origenActual(mes, 'mo')}>
                     {esBase && ev.base.origen === 'contrato'
                       ? <span className="mono">{dec(b.mo, 0)}</span>
                       : <input type="number" step="any" min="0" className="mono" value={guardado.mo ?? ''} disabled={!!pedido}
                           placeholder="cargar" onChange={(e) => setMo(mes, e.target.value === '' ? null : Number(e.target.value))} />}
                   </td>
-                  <td className="n mono" title={ipc ? `${ipc.fuente}, ${nombreMes(ipc.mes)}` : 'todavía no publicado'}>
+                  <td className="n mono con-origen" title={esBase && ev.base.origen === 'contrato' ? origenBase(ev.base, 'ipc') : origenActual(mes, 'ipc', ipc, usd)}>
                     {esBase && ev.base.origen === 'contrato' ? dec(b.ipc, 1) : ipc ? dec(ipc.valor, 1) : <span className="ayuda">{nombreMes(mesMenos(mes, 2))}: pendiente</span>}
                   </td>
-                  <td className="n mono" title={usd ? `BNA vía BCRA, ${fecha(usd.fecha)}` : 'todavía no disponible'}>
+                  <td className="n mono con-origen" title={esBase && ev.base.origen === 'contrato' ? origenBase(ev.base, 'usd') : origenActual(mes, 'usd', ipc, usd)}>
                     {esBase && ev.base.origen === 'contrato' ? dec(b.usd, 1) : usd ? dec(usd.valor, 1) : <span className="ayuda">pendiente</span>}
                   </td>
                   <td className="n mono">{esBase ? '70,0 %' : aporte('mo', 0.7)}</td>

@@ -30,6 +30,12 @@ export const CONTRATO_VMOS = {
       ipc: 12_276.8, // IPC Nivel General INDEC, agosto 2026 (n-2)
       usd: 1_524.5, // BNA vendedor divisa, octubre 2026
     },
+    // De qué fecha es cada valor base, tal como lo escribe el Anexo II.
+    fechasBase: {
+      mo: 'Básico Capitán de Ultramar de septiembre 2026 (MO0 del contrato, FENA)',
+      ipc: 'IPC Nivel General Nacional de agosto 2026, INDEC (IPC0 del contrato: n-2 de octubre)',
+      usd: 'Dólar BNA divisa vendedor del 01/10/2026 (USD0 del contrato)',
+    },
     // Paso anterior, de referencia (Excel "Formula de ajuste"): los precios de la oferta (base oct-26)
     // salen de ajustar los de marzo 2026 con la misma fórmula.
     historia: {

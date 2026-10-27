@@ -161,12 +161,12 @@ export async function leerSeriesDeVentana(mes, mesIpc) {
   const [y, m] = mes.split('-').map(Number);
   const finMes = new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 10);
   const [ipc, usd] = await Promise.all([
-    supabase.from('serie_ipc').select('mes, valor').eq('mes', mesIpc).maybeSingle(),
+    supabase.from('serie_ipc').select('mes, valor, fuente').eq('mes', mesIpc).maybeSingle(),
     supabase.from('serie_usd').select('fecha, valor').gte('fecha', `${mes}-01`).lt('fecha', finMes)
       .order('fecha').limit(1).maybeSingle(),
   ]);
   return {
-    ipc: ok(ipc) ? { valor: Number(ipc.data.valor), mes: ipc.data.mes } : null,
+    ipc: ok(ipc) ? { valor: Number(ipc.data.valor), mes: ipc.data.mes, fuente: ipc.data.fuente } : null,
     usd: ok(usd) ? { valor: Number(usd.data.valor), fecha: usd.data.fecha } : null,
   };
 }
