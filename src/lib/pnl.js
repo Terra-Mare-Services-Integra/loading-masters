@@ -199,11 +199,13 @@ export function calcularPnl({ periodos, facturaciones, personal, cargas, escenar
       estructura += a?.total > 0 ? a.total : (administracionUsd ?? esc.estructuraTmUsd) * fx(mes) * m;
       administracionReal ||= a?.total > 0;
     }
-    const impuestos = ingreso * (esc.pctImprevistos + esc.pctCredito + esc.pctIibb);
+    // Imprevistos e impuestos: solo en la proyección; en los meses ya facturados no se aplican.
+    const pctImpuestos = real ? 0 : esc.pctImprevistos + esc.pctCredito + esc.pctIibb;
+    const impuestos = ingreso * pctImpuestos;
     const costosTotal = capitanes + operacion + polizas + estructura + sergioFijo + reembolsables + impuestos;
     const bruto = ingreso - costosTotal;
     // Participación de Sergio sobre el resultado del servicio (sin la parte de seguros).
-    const brutoSeguros = ingresoSeguros - polizas - ingresoSeguros * (esc.pctImprevistos + esc.pctCredito + esc.pctIibb);
+    const brutoSeguros = ingresoSeguros - polizas - ingresoSeguros * pctImpuestos;
     const participacion = esc.pctParticipacionSg * (bruto - brutoSeguros) - esc.pctParticipacionSg * usd(esc.estructuraBaseSgUsd * factor);
 
     return {

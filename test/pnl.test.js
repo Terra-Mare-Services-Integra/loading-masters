@@ -63,8 +63,8 @@ test('P&L: proyección, facturación real y capitanes que entran después', () =
   cerca(feb.capitanes, 1_707_800, 'el segundo capitán todavía no entró');
   cerca(feb.operacion, 10 * 1_100, 'operación en pesos');
   cerca(feb.sergioFijo, 20 * 0.5 * 1_100, 'fijo de Sergio escalado');
-  cerca(feb.impuestos, 1_000_000 * 0.05, 'imprevistos e impuestos');
-  cerca(feb.bruto, 1_000_000 - 1_707_800 - 11_000 - 11_000 - 50_000, 'resultado bruto');
+  cerca(feb.impuestos, 0, 'facturado: sin imprevistos ni impuestos proyectados');
+  cerca(feb.bruto, 1_000_000 - 1_707_800 - 11_000 - 11_000, 'resultado bruto');
   cerca(feb.participacion, 0.1 * feb.bruto - 0.1 * 30 * 0.5 * 1_100, 'participación');
   assert.ok(ene.ingreso > 0, 'enero se proyecta con el precio del contrato');
   cerca(totalesPnl(filas).generacion, ene.generacion + feb.generacion, 'totales');
@@ -119,4 +119,15 @@ test('participación de Sergio: se agrupa por año calendario, separando real y 
   const [a2026, a2027] = participacionPorAnio(filas);
   assert.deepEqual([a2026.anio, a2026.devengado, a2026.real, a2026.proyectado, a2026.desde, a2026.hasta], ['2026', 220, 100, 120, '2026-10-26', '2026-12-31']);
   assert.deepEqual([a2027.anio, a2027.devengado, a2027.meses], ['2027', 130, 1]);
+});
+
+test('P&L: imprevistos e impuestos solo en los meses proyectados', () => {
+  const periodos = periodosContrato(2, '2027-01-01');
+  const esc = completarEscenario({ factorPrecio: 1, pctImprevistos: 0.01, pctIibb: 0.04 });
+  const [ene, feb] = calcularPnl({
+    periodos, personal: [], cargas: {}, fx: () => 1, escenarios: { arranque: esc, esperado: esc },
+    facturaciones: { '2027-01': { total: 1_000, factores: {}, facturaEmitidaEl: '2027-02-01', hasta: periodos[0].hasta } },
+  });
+  assert.equal(ene.impuestos, 0);
+  cerca(feb.impuestos, feb.ingreso * 0.05, 'proyección');
 });
