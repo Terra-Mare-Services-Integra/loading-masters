@@ -153,3 +153,30 @@ export async function resolverAjuste(id, estado, fecha) {
 export async function borrarAjuste(id) {
   ok(await supabase.from('ajustes').delete().eq('id', id));
 }
+
+// ─── Series oficiales (las descarga la función sincronizar-indices) ──────────
+
+// IPC1 = IPC del mes n-2; USD1 = dólar del primer día hábil cambiario del mes.
+export async function leerSeriesDeVentana(mes, mesIpc) {
+  const [y, m] = mes.split('-').map(Number);
+  const finMes = new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 10);
+  const [ipc, usd] = await Promise.all([
+    supabase.from('serie_ipc').select('mes, valor').eq('mes', mesIpc).maybeSingle(),
+    supabase.from('serie_usd').select('fecha, valor').gte('fecha', `${mes}-01`).lt('fecha', finMes)
+      .order('fecha').limit(1).maybeSingle(),
+  ]);
+  return {
+    ipc: ok(ipc) ? { valor: Number(ipc.data.valor), mes: ipc.data.mes } : null,
+    usd: ok(usd) ? { valor: Number(usd.data.valor), fecha: usd.data.fecha } : null,
+  };
+}
+
+export async function ultimaSincronizacion() {
+  return ok(await supabase.from('sincronizaciones').select('at, ok, detalle').order('at', { ascending: false }).limit(1).maybeSingle());
+}
+
+export async function sincronizarAhora() {
+  const { data, error } = await supabase.functions.invoke('sincronizar-indices', { body: {} });
+  if (error) throw error;
+  return data;
+}

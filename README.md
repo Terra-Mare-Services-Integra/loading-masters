@@ -72,6 +72,11 @@ Proyecto propio `loading-masters` (ref `sehlulimgrxdterocaml`, sa-east-1, org In
   la app guarda sola 0,8 s después de cada cambio.
 - `feriados`: compartidos entre meses.
 - `indices`: MO1, IPC1, USD1 y acuerdo gremial por mes de aplicación.
+- `serie_ipc` (IPC INDEC Nivel General, base dic-2016, serie `148.3_INIVELNAL_DICI_M_26` de
+  datos.gob.ar) y `serie_usd` (dólar BNA divisa vendedor, API de estadísticas cambiarias del BCRA):
+  las descarga la Edge Function `sincronizar-indices`, que pg_cron corre a las 9 y a las 18 h
+  (hora argentina); `sincronizaciones` registra cada corrida. La app completa sola IPC1 (mes n-2) y
+  USD1 (primer día hábil del mes); MO1 (FENA) sigue siendo manual.
 - `ajustes`: pedidos de revisión por ventana (solicitado / aprobado / rechazado), con los índices,
   la base, el factor y los precios resultantes congelados al pedir.
 - `proformas`: cada emisión guarda la foto exacta de lo enviado; no se editan ni se borran, y se
@@ -86,6 +91,8 @@ npx supabase config push    # aplicar cambios de config.toml (auth)
 ```
 
 La contraseña de la base está en `.env.local` (`SUPABASE_DB_PASSWORD`), fuera de git.
+La función se publica con `npx supabase functions deploy sincronizar-indices --use-api`; el cron
+lee la URL y la clave pública de los secretos `lm_project_url` y `lm_anon_key` del Vault.
 
 ## Deploy
 
@@ -122,7 +129,7 @@ filete bajo títulos, radio 0, márgenes A4 20/18/16 mm) y el PDF sale con texto
 | 2c | Deploy en Vercel: https://loading-masters.vercel.app | ✅ hecho |
 | 3 | Integración Xubio: crear el **Presupuesto** de venta y seguir su estado | pendiente |
 | 4 | Seguimiento del circuito: plazo de revisión, aprobación, factura, vencimiento de cobro | pendiente |
-| 5 | Ajuste de precios: índices por mes, disparadores, pedido en ventana 1–10, aprobación y precios vigentes por fecha | ✅ hecho (índices a mano) |
+| 5 | Ajuste de precios: índices por mes, disparadores, pedido en ventana 1–10, aprobación y precios vigentes por fecha | ✅ hecho (IPC y dólar automáticos, MO a mano) |
 
 ### Notas para la integración con Xubio (etapa 3)
 

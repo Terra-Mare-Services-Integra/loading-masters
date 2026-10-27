@@ -672,7 +672,10 @@ const mesMenos = (mes, n) => {
   const [y, m] = mes.split('-').map(Number);
   return new Date(Date.UTC(y, m - 1 - n, 1)).toISOString().slice(0, 7);
 };
-const pctSigno = (x) => `${x >= 0 ? '+' : ''}${(x * 100).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} %`;
+const pctSigno = (x) => {
+  const v = Math.round(x * 10000) / 100 || 0; // || 0 evita "-0,00"
+  return `${v >= 0 ? '+' : ''}${v.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} %`;
+};
 const dec = (x, n = 2) => x.toLocaleString('es-AR', { minimumFractionDigits: n, maximumFractionDigits: n });
 const ESTADO_VENTANA = { abierta: 'Abierta hoy', cerrada: 'Cerrada', futura: 'Próxima' };
 const ESTADO_PEDIDO = { solicitado: 'Pedido enviado', aprobado: 'Aprobado por VMOS', rechazado: 'Rechazado por VMOS' };
@@ -680,6 +683,24 @@ const ESTADO_PEDIDO = { solicitado: 'Pedido enviado', aprobado: 'Aprobado por VM
 function AjustePrecios({ periodo, ajustes, onCambioAjustes }) {
   const ventanas = useMemo(() => ventanasDelPeriodo(periodo), [periodo]);
   const aprobados = ajustes.filter((a) => a.estado === 'aprobado');
+  const [sync, setSync] = useState(null);
+  const [sincronizando, setSincronizando] = useState(false);
+  const [version, setVersion] = useState(0);
+
+  useEffect(() => {
+    db.ultimaSincronizacion().then(setSync).catch(() => setSync(null));
+  }, [version]);
+
+  async function sincronizar() {
+    setSincronizando(true);
+    try {
+      await db.sincronizarAhora();
+    } catch {
+      // el resultado (bien o mal) queda registrado en la última sincronización
+    }
+    setSincronizando(false);
+    setVersion((v) => v + 1);
+  }
 
   return (
     <section className="ajuste">
@@ -689,10 +710,21 @@ function AjustePrecios({ periodo, ajustes, onCambioAjustes }) {
         la acepta, rige desde el 1 del mes siguiente. Se puede pedir si el IPC o el dólar acumulan más de 15 %, si hay un
         acuerdo gremial avalado por VMOS o si pasaron 6 meses desde la última actualización.
       </p>
+      <div className="fila sync">
+        <span className="aviso">
+          IPC (INDEC, vía datos.gob.ar) y dólar BNA divisa vendedor (vía BCRA) se descargan solos a las 9 y a las 18 h.
+          {sync && ` Última actualización: ${hora.format(new Date(sync.at))}${sync.ok ? '' : ' (con errores)'}${
+            sync.detalle?.ipc?.ultimo ? ` · último IPC ${nombreMes(sync.detalle.ipc.ultimo.mes)}` : ''}${
+            sync.detalle?.usd?.ultimo ? ` · último dólar ${fecha(sync.detalle.usd.ultimo.fecha)}` : ''}.`}
+        </span>
+        <button type="button" className="secundario chico" disabled={sincronizando} onClick={sincronizar}>
+          {sincronizando ? 'Actualizando…' : 'Actualizar ahora'}
+        </button>
+      </div>
       {ventanas.length === 0
         ? <p className="aviso">Esta facturación no incluye ningún día 1 a 10: no tiene ventana de pedido.</p>
         : ventanas.map((v) => (
-          <VentanaAjuste key={v.mes} ventana={v} aprobados={aprobados}
+          <VentanaAjuste key={`${v.mes}-${version}`} ventana={v} aprobados={aprobados}
             pedido={ajustes.find((a) => a.mes === v.mes)} onCambioAjustes={onCambioAjustes} />
         ))}
     </section>
@@ -707,10 +739,19 @@ function VentanaAjuste({ ventana, aprobados, pedido, onCambioAjustes }) {
   const estado = estadoVentana(ventana, hoy);
   const [fechaPedido, setFechaPedido] = useState(estado === 'abierta' ? hoy : ventana.desde);
   const [fechaResolucion, setFechaResolucion] = useState(hoy);
+  const [series, setSeries] = useState(null);
+  const mesIpc = mesMenos(ventana.mes, 2);
 
+  // IPC1 y USD1 salen de las series oficiales; si cambian (o recién se publican), se guardan solos.
   useEffect(() => {
-    db.leerIndices([ventana.mes])
-      .then((r) => setIndices(r[ventana.mes] ?? { mo: null, ipc: null, usd: null, paritaria: false }))
+    Promise.all([db.leerIndices([ventana.mes]), db.leerSeriesDeVentana(ventana.mes, mesIpc)])
+      .then(([r, s]) => {
+        const guardados = r[ventana.mes] ?? { mo: null, ipc: null, usd: null, paritaria: false };
+        const completos = { ...guardados, ipc: s.ipc?.valor ?? guardados.ipc, usd: s.usd?.valor ?? guardados.usd };
+        if (!pedido && (completos.ipc !== guardados.ipc || completos.usd !== guardados.usd)) sinGuardar.current = true;
+        setSeries(s);
+        setIndices(pedido ? guardados : completos);
+      })
       .catch((e) => setError(e.message));
   }, [ventana.mes]);
 
@@ -731,11 +772,12 @@ function VentanaAjuste({ ventana, aprobados, pedido, onCambioAjustes }) {
     aprobados: aprobados.filter((a) => a.mes !== ventana.mes),
   });
   const set = (k, v) => { sinGuardar.current = true; setIndices((x) => ({ ...x, [k]: v })); };
-  const numero = (k, etiqueta, ayuda) => (
+  const numero = (k, etiqueta, ayuda, automatico) => (
     <label>{etiqueta}
-      <input type="number" step="any" min="0" value={indices[k] ?? ''} disabled={!!pedido}
+      <input type="number" step="any" min="0" value={indices[k] ?? ''} disabled={!!pedido || !!automatico}
+        className={automatico ? 'calculado' : ''}
         onChange={(e) => set(k, e.target.value === '' ? null : Number(e.target.value))} />
-      <span className="ayuda">{ayuda}</span>
+      <span className="ayuda">{automatico ? `Automático · ${automatico}` : ayuda}</span>
     </label>
   );
 
@@ -773,8 +815,12 @@ function VentanaAjuste({ ventana, aprobados, pedido, onCambioAjustes }) {
 
       <div className="campos">
         {numero('mo', 'MO1 · Básico Capitán de Ultramar', `FENA, ${nombreMes(ventana.mes)}`)}
-        {numero('ipc', 'IPC1 · INDEC Nivel General', `de ${nombreMes(mesMenos(ventana.mes, 2))} (n-2)`)}
-        {numero('usd', 'USD1 · BNA divisa vendedor', `primer día hábil de ${nombreMes(ventana.mes)}`)}
+        {numero('ipc', 'IPC1 · INDEC Nivel General',
+          `${nombreMes(mesIpc)} (n-2): todavía no publicado, se completa solo cuando salga`,
+          series?.ipc && `INDEC, ${nombreMes(series.ipc.mes)} (n-2)`)}
+        {numero('usd', 'USD1 · BNA divisa vendedor',
+          `primer día hábil de ${nombreMes(ventana.mes)}: todavía no disponible, se completa solo`,
+          series?.usd && `BNA vía BCRA, ${fecha(series.usd.fecha)}`)}
         <label className="check">
           <input type="checkbox" checked={!!indices.paritaria} disabled={!!pedido} onChange={(e) => set('paritaria', e.target.checked)} />
           Acuerdo gremial avalado por VMOS
