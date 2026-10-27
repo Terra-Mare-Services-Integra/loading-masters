@@ -49,8 +49,27 @@ npm run dev
   y desmarcar *Encabezados y pies de página*. Mismo diseño que el PDF de la línea de comandos.
 - **Descargar / Importar JSON**: mismo formato que `certificaciones/*.json`.
 
-Mientras no haya base de datos, la carga de cada mes queda como borrador en el navegador (se
-pierde si se borran los datos del sitio): el respaldo es el JSON descargado.
+Requiere `.env.local` con `VITE_SUPABASE_URL` y `VITE_SUPABASE_ANON_KEY` (ver `.env.example`).
+
+## Base de datos (Supabase)
+
+Proyecto propio `loading-masters` (ref `sehlulimgrxdterocaml`, sa-east-1, org Integra). Esquema en
+`supabase/migrations/`, configuración de auth en `supabase/config.toml`.
+
+- `certificaciones`: una por mes de cierre; la app guarda sola 0,8 s después de cada cambio.
+- `feriados`: compartidos entre meses.
+- `proformas`: cada emisión guarda la foto exacta de lo enviado; no se editan ni se borran, y se
+  pueden reimprimir desde el historial.
+- **Acceso**: email y contraseña, con confirmación por email. Las políticas RLS solo dejan leer y
+  escribir a cuentas `@terra-mare.com.ar` (función `es_usuario_autorizado()`); para sumar otro
+  dominio hay que cambiarla ahí y en `src/lib/supabase.js`.
+
+```bash
+npx supabase db push        # aplicar migraciones nuevas
+npx supabase config push    # aplicar cambios de config.toml (auth)
+```
+
+La contraseña de la base está en `.env.local` (`SUPABASE_DB_PASSWORD`), fuera de git.
 
 ## Emitir la proforma por línea de comandos
 
@@ -75,8 +94,9 @@ filete bajo títulos, radio 0, márgenes A4 20/18/16 mm) y el PDF sale con texto
 |---|-------|--------|
 | 0 | Motor de cálculo: tarifario, certificación, calendario de cobro, fórmula de ajuste | ✅ hecho |
 | 1 | Proforma en PDF con el detalle de días trabajados por ítem (carga por JSON) | ✅ hecho |
-| 2 | App web: carga de la certificación día por día (grilla tipo Excel) y emisión desde ahí | ✅ hecho (sin base de datos) |
-| 2b | Guardar certificaciones y proformas emitidas en Supabase, con login | pendiente |
+| 2 | App web: carga de la certificación día por día (grilla tipo Excel) y emisión desde ahí | ✅ hecho |
+| 2b | Guardar certificaciones y proformas emitidas en Supabase, con login | ✅ hecho |
+| 2c | Deploy en Vercel | pendiente |
 | 3 | Integración Xubio: crear el **Presupuesto** de venta y seguir su estado | pendiente |
 | 4 | Seguimiento del circuito: plazo de revisión, aprobación, factura, vencimiento de cobro | pendiente |
 | 5 | Ajuste de precios: carga mensual de índices (FENA, INDEC, BNA), alertas de disparadores, historial de precios vigentes | pendiente |

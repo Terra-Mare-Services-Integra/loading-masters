@@ -90,6 +90,25 @@ button.terciario:hover{ color:var(--tm-critical); background:transparent; }
 .acciones{ margin-top:32px; display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
 .aviso{ font-size:13px; color:var(--text-muted); }
 
+fieldset.contenido{ border:0; margin:0; padding:0; min-width:0; }
+fieldset.contenido:disabled{ opacity:.6; }
+
+.usuario{ margin-left:auto; display:flex; align-items:center; gap:8px; font-size:13px; color:var(--text-muted); }
+.estado{ font-size:12px; color:var(--text-muted); align-self:center; min-width:200px; }
+.estado.pendiente, .estado.guardando{ color:var(--tm-blue-mid); }
+.estado.error, .aviso.error{ color:var(--tm-critical); }
+
+.ingreso{ max-width:420px; margin:48px auto; }
+.ingreso form{ display:flex; flex-direction:column; gap:16px; margin:32px 0 16px; }
+.ingreso .terciario{ padding-left:0; }
+
+.historial{ margin-top:48px; }
+.historial table{ width:100%; border-collapse:collapse; margin-top:12px; }
+.historial th{ text-align:left; font-size:12px; font-weight:600; padding:0 8px 6px; border-bottom:1px solid var(--tm-blue-light); }
+.historial td{ padding:6px 8px; border-bottom:1px solid var(--border-subtle); }
+.historial .n{ text-align:right; }
+button.chico{ padding:4px 12px; min-height:0; font-size:12px; }
+
 @media (max-width: 900px){
   main{ padding:16px; }
   .barra{ padding:12px 16px; }
