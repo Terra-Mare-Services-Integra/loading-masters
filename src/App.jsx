@@ -163,9 +163,9 @@ function useContrato() {
     Promise.all([
       db.leerEscenarios(), db.listarFacturacionesPorMes(), db.leerPersonal(), db.leerReferencia('cargas_sociales'),
       db.leerReferencia('inicios'), db.leerAjustes(), db.leerDolarPorMes(CONTRATO_VMOS.inicioServicio.slice(0, 7)),
-      db.leerSueldosMes(), db.leerGastos(), db.leerReferencia('seguros'), db.leerGastosAdmin(), db.leerReferencia('administracion'),
+      db.leerSueldosMes(), db.leerGastos(), db.leerReferencia('seguros'), db.leerGastosAdmin(), db.leerReferencia('administracion'), db.leerReferencia('personas_gastos'),
     ])
-      .then(([escenarios, facturaciones, personal, cargas, inicios, ajustes, dolar, sueldos, gastos, seguros, gastosAdmin, administracion]) => {
+      .then(([escenarios, facturaciones, personal, cargas, inicios, ajustes, dolar, sueldos, gastos, seguros, gastosAdmin, administracion, personasGastos]) => {
         const esperado = escenarios.esperado && completarEscenario(escenarios.esperado.supuestos);
         const arranque = escenarios.arranque && completarEscenario(escenarios.arranque.supuestos);
         if (!esperado || !arranque || !cargas) throw new Error('Faltan los supuestos o las cargas sociales en la base de datos');
@@ -213,7 +213,7 @@ function useContrato() {
             proyectado: { operacion: esc.operacionUsd * fx(m.mes) * meq, sergio: esc.sgFijoUsd * factor * fx(m.mes) * meq },
           };
         });
-        setDatos({ periodos, facturaciones, personal, filas, mesesSueldos, mesesOperacion, mesesAdministracion, presupuestoAdmin, dolarUltimo: dolar.ultimo, inicios: inicios ?? {}, seguros: seguros ?? { cuotas: 10, polizas: [] }, arranque });
+        setDatos({ periodos, facturaciones, personal, filas, mesesSueldos, mesesOperacion, mesesAdministracion, presupuestoAdmin, personasGastos: personasGastos ?? [], dolarUltimo: dolar.ultimo, inicios: inicios ?? {}, seguros: seguros ?? { cuotas: 10, polizas: [] }, arranque });
       })
       .catch((e) => setError(e.message));
   }, [version]);
@@ -1977,7 +1977,7 @@ function Operacion() {
 
 const gastoVacio = (mes, fechaDefecto) => ({
   mes: mes.mes, fecha: fechaDefecto, rubro: 'transporte_aereo', reembolsable: false, descripcion: '', proveedor: '',
-  factura_numero: '', persona_id: null, moneda: 'ARS', monto: '', iva_pct: 0.21, tipo_cambio: null, pagado_el: null, pagado_por: '',
+  factura_numero: '', persona_id: null, persona: '', moneda: 'ARS', monto: '', iva_pct: 0.21, tipo_cambio: null, pagado_el: null, pagado_por: '',
 });
 
 function GastosMes({ mes, datos, onCambio }) {
@@ -2002,6 +2002,7 @@ function GastosMes({ mes, datos, onCambio }) {
       });
       setGastos((gs) => [...gs, { ...g, monto: Number(g.monto), iva_pct: Number(g.iva_pct), tipo_cambio: g.tipo_cambio && Number(g.tipo_cambio) }]);
       setNuevo({ ...gastoVacio(mes, nuevo.fecha), rubro: nuevo.rubro, reembolsable: nuevo.reembolsable });
+      setOtraPersona(false);
       onCambio();
     } catch (e) {
       setError(e.message);
@@ -2031,15 +2032,28 @@ function GastosMes({ mes, datos, onCambio }) {
   }
 
   function honorarioSergio() {
+    setOtraPersona(false);
     setNuevo({
       ...gastoVacio(mes, fechaDefecto), rubro: 'superintendente', reembolsable: false, moneda: 'USD',
       monto: Math.round(mes.sgFijoUsd * 100) / 100, tipo_cambio: tc, iva_pct: 0, proveedor: 'Superintendente técnico',
+      persona: datos.personasGastos.find((n) => /^sergio/i.test(n)) ?? '',
       descripcion: `Honorarios ${mes.nombre}`,
     });
   }
 
   const set = (c) => setNuevo((x) => ({ ...x, ...c }));
   const rubrosConGastos = RUBROS.filter((ru) => r.porRubro[ru.id]);
+  // Persona del gasto: un capitán (persona_id), alguien de la lista o un nombre libre (persona).
+  const [otraPersona, setOtraPersona] = useState(false);
+  const valorPersona = nuevo.persona_id ? `id:${nuevo.persona_id}`
+    : otraPersona ? 'otro' : nuevo.persona ? `n:${nuevo.persona}` : '';
+  function elegirPersona(v) {
+    setOtraPersona(v === 'otro');
+    if (v.startsWith('id:')) set({ persona_id: v.slice(3), persona: '' });
+    else if (v.startsWith('n:')) set({ persona_id: null, persona: v.slice(2) });
+    else set({ persona_id: null, persona: '' });
+  }
+  const nombrePersona = (g) => (g.persona_id ? datos.personal.find((p) => p.id === g.persona_id)?.nombre : g.persona);
 
   return (
     <>
@@ -2095,12 +2109,19 @@ function GastosMes({ mes, datos, onCambio }) {
         <div className="campos">
           <label>Proveedor<input value={nuevo.proveedor} onChange={(e) => set({ proveedor: e.target.value })} /></label>
           <label>Factura N°<input value={nuevo.factura_numero} onChange={(e) => set({ factura_numero: e.target.value })} /></label>
-          <label>Capitán (opcional)
-            <select value={nuevo.persona_id ?? ''} onChange={(e) => set({ persona_id: e.target.value || null })}>
+          <label>Persona (opcional)
+            <select value={valorPersona} onChange={(e) => elegirPersona(e.target.value)}>
               <option value="">—</option>
-              {datos.personal.filter((p) => p.inicio).map((p) => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+              <optgroup label="Capitanes">
+                {datos.personal.filter((p) => p.inicio).map((p) => <option key={p.id} value={`id:${p.id}`}>{p.nombre}</option>)}
+              </optgroup>
+              <optgroup label="Otras personas">
+                {datos.personasGastos.map((n) => <option key={n} value={`n:${n}`}>{n}</option>)}
+                <option value="otro">Otro…</option>
+              </optgroup>
             </select>
           </label>
+          {valorPersona === 'otro' && <label>Nombre<input value={nuevo.persona} onChange={(e) => set({ persona: e.target.value })} /></label>}
           <label>Moneda
             <select value={nuevo.moneda} onChange={(e) => set({ moneda: e.target.value, tipo_cambio: e.target.value === 'USD' ? (nuevo.tipo_cambio ?? tc) : null })}>
               <option value="ARS">ARS</option><option value="USD">USD</option>
@@ -2131,7 +2152,7 @@ function GastosMes({ mes, datos, onCambio }) {
               <tr key={g.id} className={g.reembolsable ? 'reembolsable' : ''}>
                 <td className="mono">{fecha(g.fecha)}</td>
                 <td>{etiquetaGasto(g)}</td>
-                <td>{g.descripcion}{g.persona_id && <span className="ayuda"> · {datos.personal.find((p) => p.id === g.persona_id)?.nombre}</span>}</td>
+                <td>{g.descripcion}{nombrePersona(g) && <span className="ayuda"> · {nombrePersona(g)}</span>}</td>
                 <td>{g.proveedor}{g.factura_numero && <span className="ayuda"> · {g.factura_numero}</span>}</td>
                 <td className="n mono">{g.moneda === 'USD' ? `USD ${dec(g.monto, 2)}` : pesos(g.monto)}{g.moneda === 'USD' && <div className="ayuda">TC {dec(g.tipo_cambio, 2)}</div>}</td>
                 <td className="n mono fuerte">{pesos(montoArs(g))}</td>
