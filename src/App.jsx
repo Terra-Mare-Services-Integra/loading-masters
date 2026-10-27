@@ -822,6 +822,15 @@ function Historial({ proformas, onCambio }) {
   const [enviando, setEnviando] = useState(null); // id de la que se está marcando como enviada
   const [fechaEnvio, setFechaEnvio] = useState(hoyIso());
   const [error, setError] = useState('');
+  // Presupuestos de Xubio de estas proformas y la configuración de ventas.
+  const [vinculos, setVinculos] = useState({});
+  const [cfgVentas, setCfgVentas] = useState(null);
+  const [versionXubio, setVersionXubio] = useState(0);
+  const ids = proformas.map((p) => p.id).join(',');
+  useEffect(() => {
+    db.leerPresupuestosXubio(ids ? ids.split(',') : []).then(setVinculos).catch(() => setVinculos({}));
+    db.leerReferencia('xubio_ventas').then(setCfgVentas).catch(() => setCfgVentas(null));
+  }, [ids, versionXubio]);
   if (!proformas.length) return null;
 
   const anuladas = proformas.filter((p) => p.estado === 'anulada');
@@ -876,11 +885,16 @@ function Historial({ proformas, onCambio }) {
                     <button type="button" className="chico" onClick={() => { setFechaEnvio(hoyIso()); setEnviando(p.id); }}>Marcar enviada</button>
                     <button type="button" className="terciario chico" onClick={() => {
                       const motivo = prompt('Motivo de la anulación (por ejemplo: prueba, error en días):');
-                      if (motivo && motivo.trim()) accion(() => db.anularProforma(p.id, motivo.trim()));
+                      // Si ya tenía presupuesto en Xubio, se pasa a rechazado.
+                      if (motivo && motivo.trim()) accion(async () => {
+                        await db.anularProforma(p.id, motivo.trim());
+                        if (vinculos[p.id]) await db.estadoPresupuestoXubio(p.id, 'rechazado');
+                      });
                     }}>Anular</button>
                   </>
                 ) : null}
                 <button type="button" className="secundario chico" onClick={() => imprimir(p.datos)}>Reimprimir</button>
+                <XubioProforma proforma={p} vinculo={vinculos[p.id]} cfg={cfgVentas} onCambio={async () => setVersionXubio((v) => v + 1)} />
               </td>
             </tr>
           ))}
@@ -1338,7 +1352,7 @@ const MODULOS = [
   { id: 'vehiculo', nombre: 'Vehículo', desc: 'Camioneta: amortización, póliza, services, patente, combustible' },
   { id: 'administracion', nombre: 'Administración', desc: 'Sistemas de sueldos y contable, telefonía, licencias, honorarios' },
   { id: 'upselling', nombre: 'Up selling', desc: 'Trabajos que se cobran aparte (ingreso y costo) y reembolsables' },
-  { id: 'xubio', nombre: 'Xubio', desc: 'Facturas de compra del proyecto: actualizar y clasificar' },
+  { id: 'xubio', nombre: 'Xubio', desc: 'Compras del proyecto y configuración para enviar las proformas' },
   { id: 'seguros', nombre: 'Seguros', desc: 'RC y E&O: prima anual en cuotas, facturadas con los ítems 1a–1c' },
 ];
 const ACTIVOS = ['dashboards', 'facturaciones', 'formula', 'resultado', 'sueldos', 'desempeno', 'operacion', 'vehiculo', 'administracion', 'seguros', 'upselling', 'xubio'];
@@ -2940,6 +2954,8 @@ function Xubio() {
 
       <ComprasXubio />
 
+      <ConfigVentasXubio />
+
       <section className="tarjeta">
         <div className="overline">Diagnóstico de la conexión</div>
         <p className="ayuda">Prueba el acceso y trae una muestra de órdenes de compra, facturas de compra y pagos tal como los devuelve Xubio. No guarda nada.</p>
@@ -3556,5 +3572,190 @@ function Dashboards() {
         </section>
       </div>
     </main>
+  );
+}
+
+// ─── Xubio: ventas (presupuesto de la proforma) ──────────────────────────────
+
+// Ítems del contrato que se facturan (cada uno necesita su producto de venta en Xubio).
+const ITEMS_VENTA = CONTRATO_VMOS.items.map((i) => ({ codigo: i.codigo, nombre: `${i.codigo} · ${i.descripcion}` }));
+
+// Qué falta para poder crear el presupuesto en Xubio (el producto se exige por ítem al enviar).
+const faltanVentas = (cfg) => [
+  !cfg?.cliente?.id && 'cliente',
+  !cfg?.puntoVenta?.id && 'punto de venta',
+  !cfg?.centroDeCosto?.id && 'centro de costo',
+  !cfg?.productos?.['1']?.id && 'producto del ítem 1',
+].filter(Boolean);
+
+function ConfigVentasXubio() {
+  const [cfg, setCfg] = useState(null);
+  const [opciones, setOpciones] = useState(null);
+  const [cargando, setCargando] = useState(false);
+  const [aviso, setAviso] = useState('');
+
+  useEffect(() => {
+    db.leerReferencia('xubio_ventas').then((v) => setCfg(v ?? { productos: {}, mail: { para: '', cc: '' } })).catch((e) => setAviso(`Error: ${e.message}`));
+  }, []);
+
+  async function traerOpciones() {
+    setCargando(true);
+    setAviso('');
+    try {
+      const o = await db.opcionesVentasXubio();
+      setOpciones(o);
+      // Sugerencias si todavía no se eligió: punto de venta 00001 y centro de costo del proyecto.
+      setCfg((c) => ({
+        ...c,
+        puntoVenta: c.puntoVenta ?? o.puntosDeVenta.find((p) => p.nombre.includes('00001')) ?? null,
+        centroDeCosto: c.centroDeCosto ?? o.centrosDeCosto.find((x) => x.nombre === 'Proyecto VMOS') ?? null,
+        cliente: c.cliente ?? o.clientes.find((x) => /vmos/i.test(x.nombre)) ?? null,
+      }));
+    } catch (e) {
+      setAviso(`Error: ${e.message}`);
+    } finally {
+      setCargando(false);
+    }
+  }
+
+  async function guardar() {
+    setAviso('');
+    try {
+      await db.guardarReferencia('xubio_ventas', cfg);
+      setAviso('Guardado');
+    } catch (e) {
+      setAviso(`Error: ${e.message}`);
+    }
+  }
+
+  if (!cfg) return null;
+  const faltan = faltanVentas(cfg);
+  const elegir = (lista, valor, onCambio, vacio = '— elegir —') => (
+    <select value={valor?.id ?? ''} onChange={(e) => onCambio(lista.find((x) => String(x.id) === e.target.value) ?? null)}>
+      <option value="">{vacio}</option>
+      {lista.map((x) => <option key={x.id} value={x.id}>{x.nombre}{x.cuit ? ` · ${x.cuit}` : ''}</option>)}
+    </select>
+  );
+  const fijo = (x) => <span className="mono">{x?.nombre ?? '—'}</span>;
+
+  return (
+    <section className="tarjeta">
+      <div className="ventana-cabeza">
+        <div className="overline">Ventas · presupuesto de la proforma</div>
+        <button type="button" className="secundario" onClick={traerOpciones} disabled={cargando}>{cargando ? 'Consultando Xubio…' : 'Cargar opciones de Xubio'}</button>
+      </div>
+      <p className="ayuda">
+        {faltan.length
+          ? <>Para enviar proformas a Xubio falta: <strong>{faltan.join(', ')}</strong>. Si el cliente o los productos no aparecen, hay que darlos de alta en Xubio y volver a cargar las opciones.</>
+          : 'Listo: las proformas se pueden enviar a Xubio como presupuesto.'}
+      </p>
+      <div className="tabla-scroll">
+        <table className="tabla-ajuste">
+          <tbody>
+            <tr><td>Cliente</td><td>{opciones ? elegir(opciones.clientes, cfg.cliente, (v) => setCfg({ ...cfg, cliente: v })) : fijo(cfg.cliente)}</td></tr>
+            <tr><td>Punto de venta</td><td>{opciones ? elegir(opciones.puntosDeVenta, cfg.puntoVenta, (v) => setCfg({ ...cfg, puntoVenta: v })) : fijo(cfg.puntoVenta)}</td></tr>
+            <tr><td>Centro de costo</td><td>{opciones ? elegir(opciones.centrosDeCosto, cfg.centroDeCosto, (v) => setCfg({ ...cfg, centroDeCosto: v })) : fijo(cfg.centroDeCosto)}</td></tr>
+            {ITEMS_VENTA.map((it) => (
+              <tr key={it.codigo}>
+                <td>Producto · {it.nombre}</td>
+                <td>{opciones
+                  ? elegir(opciones.productos, cfg.productos?.[it.codigo], (v) => setCfg({ ...cfg, productos: { ...cfg.productos, [it.codigo]: v } }))
+                  : fijo(cfg.productos?.[it.codigo])}</td>
+              </tr>
+            ))}
+            <tr><td>Mail a VMOS · para</td><td><input className="ancho-mail" value={cfg.mail?.para ?? ''} placeholder="separados por coma" onChange={(e) => setCfg({ ...cfg, mail: { ...cfg.mail, para: e.target.value } })} /></td></tr>
+            <tr><td>Mail a VMOS · con copia</td><td><input className="ancho-mail" value={cfg.mail?.cc ?? ''} placeholder="separados por coma" onChange={(e) => setCfg({ ...cfg, mail: { ...cfg.mail, cc: e.target.value } })} /></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div className="acciones">
+        <button type="button" onClick={guardar}>Guardar</button>
+        {aviso && <span className={`ayuda ${aviso.startsWith('Error') ? 'error' : ''}`}>{aviso}</span>}
+      </div>
+    </section>
+  );
+}
+
+// Descarga un PDF que vino en base64.
+function descargarBase64(nombre, base64) {
+  const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+  const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
+  const a = Object.assign(document.createElement('a'), { href: url, download: nombre });
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
+// Acciones de Xubio de una proforma: enviar el presupuesto, bajar su PDF y preparar el mail.
+function XubioProforma({ proforma: p, vinculo, cfg, onCambio }) {
+  const [ocupado, setOcupado] = useState('');
+  const [error, setError] = useState('');
+  if (!cfg || !['emitida', 'enviada'].includes(p.estado)) return null;
+  const faltan = faltanVentas(cfg);
+
+  async function hacer(nombre, fn) {
+    setOcupado(nombre);
+    setError('');
+    try {
+      await fn();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setOcupado('');
+    }
+  }
+
+  const enviar = () => hacer('enviar', async () => {
+    const texto = vinculo
+      ? `Se va a actualizar el presupuesto ${vinculo.numero || vinculo.transaccion_id} en Xubio con esta proforma (${pesos(Number(p.total))} con IVA). ¿Seguir?`
+      : `Se va a crear un presupuesto en Xubio para VMOS por ${pesos(Number(p.total))} con IVA. ¿Seguir?`;
+    if (!confirm(texto)) return;
+    const r = await db.enviarPresupuestoXubio(p.id);
+    if (r.total && Math.abs(Number(r.total) - Number(p.total)) > 0.05) {
+      setError(`Atención: Xubio calculó ${pesos(Number(r.total))} y la proforma dice ${pesos(Number(p.total))}. Revisá el presupuesto en Xubio.`);
+    }
+    await onCambio();
+  });
+
+  const bajarPdf = () => hacer('pdf', async () => {
+    const r = await db.pdfPresupuestoXubio(p.id);
+    descargarBase64(r.nombre, r.base64);
+  });
+
+  // Baja los dos PDF (presupuesto de Xubio y detalle de la app) y abre el mail con todo completo.
+  const prepararMail = () => hacer('mail', async () => {
+    const r = await db.pdfPresupuestoXubio(p.id);
+    descargarBase64(r.nombre, r.base64);
+    imprimir(p.datos);
+    const per = p.datos.certificacion.periodo;
+    const asunto = `Proforma ${p.numero} · Servicio CO&C · ${fecha(per.desde)} al ${fecha(per.hasta)} · Terra Mare`;
+    const cuerpo = [
+      'Estimados:',
+      '',
+      `Adjuntamos la proforma ${p.numero} (presupuesto ${vinculo.numero || vinculo.transaccion_id}) por el servicio de Capitán Operativo y Carga del período ${fecha(per.desde)} al ${fecha(per.hasta)}, por un total de ${pesos(Number(p.total))} IVA incluido, junto con el detalle diario de la certificación.`,
+      '',
+      'Quedamos a disposición por cualquier consulta.',
+      '',
+      'Saludos,',
+    ].join('\n');
+    const cc = cfg.mail?.cc ? `&cc=${encodeURIComponent(cfg.mail.cc)}` : '';
+    window.location.href = `mailto:${encodeURIComponent(cfg.mail?.para ?? '')}?subject=${encodeURIComponent(asunto)}${cc}&body=${encodeURIComponent(cuerpo)}`;
+  });
+
+  return (
+    <div className="xubio-proforma">
+      {vinculo ? (
+        <>
+          <span className="ayuda">Xubio: presupuesto <span className="mono">{vinculo.numero || vinculo.transaccion_id}</span></span>
+          <button type="button" className="secundario chico" disabled={!!ocupado} onClick={bajarPdf}>{ocupado === 'pdf' ? 'Bajando…' : 'PDF Xubio'}</button>
+          <button type="button" className="chico" disabled={!!ocupado} onClick={prepararMail}>{ocupado === 'mail' ? 'Preparando…' : 'Preparar mail'}</button>
+          {p.estado === 'emitida' && <button type="button" className="terciario chico" disabled={!!ocupado} onClick={enviar}>Actualizar en Xubio</button>}
+        </>
+      ) : faltan.length ? (
+        <span className="ayuda" title={`Falta: ${faltan.join(', ')}`}>Xubio: falta configurar (cajita Xubio)</span>
+      ) : (
+        <button type="button" className="secundario chico" disabled={!!ocupado} onClick={enviar}>{ocupado === 'enviar' ? 'Enviando…' : 'Enviar a Xubio'}</button>
+      )}
+      {error && <span className="ayuda error">{error}</span>}
+    </div>
   );
 }

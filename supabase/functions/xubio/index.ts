@@ -4,6 +4,10 @@
 // - "diagnostico": prueba la conexión y trae una muestra de OC, facturas de compra y pagos.
 // - "sincronizar-compras": trae los renglones de facturas de compra del centro de costo del proyecto a
 //   xubio_compras y les aplica la clasificación por producto. La corre un cron diario y el botón de la app.
+// - "opciones-ventas": clientes, productos de venta, puntos de venta y centros de costo para configurar.
+// - "enviar-presupuesto": crea (o actualiza) en Xubio el presupuesto de una proforma emitida.
+// - "pdf-presupuesto": devuelve el PDF del presupuesto (base64).
+// - "estado-presupuesto": pasa el presupuesto a aprobado, rechazado o facturado.
 import { createClient } from 'npm:@supabase/supabase-js@2';
 
 const BASE = 'https://xubio.com/API/1.1';
@@ -32,8 +36,12 @@ async function token() {
   return d.access_token as string;
 }
 
-async function xubio(tk: string, ruta: string) {
-  const r = await fetch(`${BASE}${ruta}`, { headers: { Authorization: `Bearer ${tk}`, Accept: 'application/json' } });
+async function xubio(tk: string, ruta: string, metodo = 'GET', cuerpo?: unknown) {
+  const r = await fetch(`${BASE}${ruta}`, {
+    method: metodo,
+    headers: { Authorization: `Bearer ${tk}`, Accept: 'application/json', ...(cuerpo ? { 'Content-Type': 'application/json' } : {}) },
+    ...(cuerpo ? { body: JSON.stringify(cuerpo) } : {}),
+  });
   // Xubio manda UTF-8 aunque el encabezado diga otra cosa: se decodifica a mano para no romper los acentos.
   const texto = new TextDecoder('utf-8').decode(await r.arrayBuffer());
   if (!r.ok) throw new Error(`${ruta} respondió ${r.status}: ${texto.slice(0, 200)}`);
@@ -228,6 +236,133 @@ async function sincronizarCompras(desdeParam?: string, hastaParam?: string) {
   return log;
 }
 
+// ─── Ventas: presupuesto de la proforma ──────────────────────────────────────
+
+const selector = (x: { id: number; nombre: string } | null) => (x ? { ID: x.id, id: x.id, nombre: x.nombre } : null);
+const ESTADOS_PRESUPUESTO: Record<string, number> = { pendiente: -3, aprobado: -2, rechazado: -7, facturado: -5 };
+
+async function opcionesVentas() {
+  const tk = await token();
+  const [clientes, productos, puntos, centros] = await Promise.all([
+    xubio(tk, '/clienteBean'), xubio(tk, '/ProductoVentaBean'), xubio(tk, '/puntoVentaBean'), xubio(tk, '/centroDeCostoBean'),
+  ]);
+  return {
+    clientes: lista(clientes).map((c: any) => ({ id: c.cliente_id ?? c.id, nombre: c.razonSocial || c.nombre, cuit: c.identificacionTributaria?.numero ?? c.cuit ?? null })),
+    productos: lista(productos).filter((p: any) => p.activo !== false).map((p: any) => ({ id: p.productoid ?? p.id, nombre: p.nombre, codigo: p.codigo ?? null })),
+    puntosDeVenta: lista(puntos).map((p: any) => ({ id: p.puntoVentaId ?? p.id, nombre: `${p.nombre}${p.puntoVenta ? ` (${p.puntoVenta})` : ''}` })),
+    centrosDeCosto: lista(centros).map((c: any) => ({ id: c.ID ?? c.id, nombre: c.nombre })),
+  };
+}
+
+async function configVentas() {
+  const { data } = await db.from('referencias').select('valor').eq('clave', 'xubio_ventas').maybeSingle();
+  const cfg = data?.valor ?? {};
+  const faltan = ['cliente', 'puntoVenta', 'centroDeCosto'].filter((k) => !cfg[k]?.id);
+  return { cfg, faltan };
+}
+
+// Un renglón por ítem facturado de la proforma, con cantidad 1 y el importe del ítem con IVA: así el
+// total coincide exacto con la proforma. El cálculo (meses equivalentes × precio) va en la descripción.
+function cuerpoPresupuesto(pf: any, cfg: any) {
+  const d = pf.datos;
+  const cert = d.certificacion;
+  const iva = Number(d.iva ?? 0.21);
+  const renglones = cert.items.filter((i: any) => Number(i.importe) > 0).map((i: any) => {
+    const producto = cfg.productos?.[i.codigo];
+    if (!producto?.id) throw new Error(`Falta elegir el producto de venta para el ítem ${i.codigo}`);
+    const conIva = Math.round(Number(i.importe) * (1 + iva) * 100) / 100;
+    const detalle = i.tipo === 'reembolsable'
+      ? `gastos reembolsables ${Number(i.gasto).toFixed(2)} + fee`
+      : `${Number(i.mesesEquivalentes).toFixed(4)} meses equivalentes × ${Number(i.precioMensual).toFixed(2)}`;
+    return {
+      producto: selector(producto),
+      centroDeCosto: selector(cfg.centroDeCosto),
+      descripcion: `${i.codigo} · ${i.descripcion} · ${detalle}`,
+      cantidad: 1,
+      precio: conIva,
+      precioconivaincluido: conIva,
+      importe: Number(i.importe),
+      total: conIva,
+    };
+  });
+  if (!renglones.length) throw new Error('La proforma no tiene ítems con importe');
+  const dma = (iso: string) => iso.split('-').reverse().join('/');
+  return {
+    externalId: pf.id,
+    cliente: selector(cfg.cliente),
+    puntoVenta: selector(cfg.puntoVenta),
+    fecha: d.fechaEmision,
+    fechaVto: d.calendario?.finRevision ?? d.fechaEmision,
+    condicionDePago: 1,
+    cotizacion: 1,
+    descripcion: `Proforma ${pf.numero} · Servicio CO&C VMOS · período ${dma(cert.periodo.desde)} al ${dma(cert.periodo.hasta)}`,
+    transaccionProductoItems: renglones,
+  };
+}
+
+async function enviarPresupuesto(proformaId: string, email: string | null) {
+  const { cfg, faltan } = await configVentas();
+  if (faltan.length) throw new Error(`Falta configurar en Xubio: ${faltan.join(', ')}`);
+  const { data: pf, error } = await db.from('proformas').select('id, numero, datos, estado').eq('id', proformaId).single();
+  if (error || !pf) throw new Error('No se encontró la proforma');
+  if (pf.estado === 'anulada' || pf.estado === 'reemplazada') throw new Error(`La proforma está ${pf.estado}`);
+  const cuerpo = cuerpoPresupuesto(pf, cfg);
+  const tk = await token();
+  // Si ya se envió, se actualiza el mismo presupuesto en vez de crear otro.
+  const { data: previo } = await db.from('xubio_presupuestos').select('*').eq('proforma_id', proformaId).maybeSingle();
+  const res = previo
+    ? await xubio(tk, `/presupuestoBean/${previo.transaccion_id}`, 'PUT', { ...cuerpo, transaccionid: previo.transaccion_id })
+    : await xubio(tk, '/presupuestoBean', 'POST', cuerpo);
+  const p = lista(res)[0] ?? {};
+  const fila = {
+    proforma_id: proformaId,
+    transaccion_id: p.transaccionid ?? previo?.transaccion_id,
+    numero: p.numeroDocumento ?? previo?.numero ?? '',
+    total: p.importetotal ?? null,
+    estado: 'pendiente',
+    enviado_por: email,
+    actualizado_at: new Date().toISOString(),
+  };
+  if (!fila.transaccion_id) throw new Error('Xubio no devolvió el número de transacción del presupuesto');
+  const { error: e2 } = await db.from('xubio_presupuestos').upsert(fila);
+  if (e2) throw e2;
+  return { ...fila, totalProforma: pf.datos.total };
+}
+
+async function pdfPresupuesto(proformaId: string) {
+  const { data: v } = await db.from('xubio_presupuestos').select('transaccion_id, numero').eq('proforma_id', proformaId).maybeSingle();
+  if (!v) throw new Error('Esta proforma todavía no se envió a Xubio');
+  const tk = await token();
+  const errores: string[] = [];
+  // El tipo de impresión no está documentado: se prueban los valores habituales.
+  for (const tipo of [1, 0, 2]) {
+    try {
+      const r = lista(await xubio(tk, `/imprimirPDF?idtransaccion=${v.transaccion_id}&tipoimpresion=${tipo}`))[0] ?? {};
+      if (!r.urlPdf) continue;
+      const pdf = await fetch(r.urlPdf);
+      if (!pdf.ok) throw new Error(`descarga ${pdf.status}`);
+      const bytes = new Uint8Array(await pdf.arrayBuffer());
+      let bin = '';
+      for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      return { nombre: `Presupuesto Xubio ${v.numero || v.transaccion_id}.pdf`, base64: btoa(bin), tipoimpresion: tipo };
+    } catch (e) {
+      errores.push(`tipo ${tipo}: ${(e as Error).message}`);
+    }
+  }
+  throw new Error(`Xubio no devolvió el PDF (${errores.join(' · ') || 'sin URL'})`);
+}
+
+async function estadoPresupuesto(proformaId: string, estado: string) {
+  const codigo = ESTADOS_PRESUPUESTO[estado];
+  if (!codigo) throw new Error(`Estado desconocido: ${estado}`);
+  const { data: v } = await db.from('xubio_presupuestos').select('transaccion_id').eq('proforma_id', proformaId).maybeSingle();
+  if (!v) return { sinPresupuesto: true };
+  const tk = await token();
+  await xubio(tk, `/presupuestoBean/${v.transaccion_id}/estado`, 'PUT', { ID: codigo, id: codigo });
+  await db.from('xubio_presupuestos').update({ estado, actualizado_at: new Date().toISOString() }).eq('proforma_id', proformaId);
+  return { estado };
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });
   try {
@@ -243,11 +378,16 @@ Deno.serve(async (req) => {
     const { data: autorizado, error } = await usuario.rpc('es_usuario_autorizado');
     if (error || !autorizado) return responder({ error: 'No autorizado' }, 403);
 
-    const { accion = 'diagnostico', desde, hasta } = cuerpo;
+    const { data: { user } } = await usuario.auth.getUser();
+    const { accion = 'diagnostico', desde, hasta, proformaId, estado } = cuerpo;
     const hoy = new Date();
     const hace90 = new Date(hoy.getTime() - 90 * 864e5);
     if (accion === 'diagnostico') return responder(await diagnostico(desde ?? fechaIso(hace90), hasta ?? fechaIso(hoy)));
     if (accion === 'sincronizar-compras') return responder(await sincronizarCompras(desde, hasta));
+    if (accion === 'opciones-ventas') return responder(await opcionesVentas());
+    if (accion === 'enviar-presupuesto') return responder(await enviarPresupuesto(proformaId, user?.email ?? null));
+    if (accion === 'pdf-presupuesto') return responder(await pdfPresupuesto(proformaId));
+    if (accion === 'estado-presupuesto') return responder(await estadoPresupuesto(proformaId, estado));
     return responder({ error: `Acción desconocida: ${accion}` }, 400);
   } catch (e) {
     return responder({ error: (e as Error).message }, 500);

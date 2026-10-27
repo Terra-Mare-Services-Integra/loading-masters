@@ -442,3 +442,26 @@ export async function clasificarCompraXubio(id, area, rubro) {
 export async function actualizarCompraXubio(id, { pagado_el }) {
   ok(await supabase.from('xubio_compras').update({ pagado_el: pagado_el || null }).eq('id', id));
 }
+
+// ─── Xubio: presupuesto de cada proforma ─────────────────────────────────────
+
+async function accionXubio(accion, extra = {}) {
+  const { data, error } = await supabase.functions.invoke('xubio', { body: { accion, ...extra } });
+  if (error) {
+    // El mensaje de la función viene en el cuerpo de la respuesta.
+    const detalle = await error.context?.json?.().catch(() => null);
+    throw new Error(detalle?.error ?? data?.error ?? error.message);
+  }
+  return data;
+}
+
+export const opcionesVentasXubio = () => accionXubio('opciones-ventas');
+export const enviarPresupuestoXubio = (proformaId) => accionXubio('enviar-presupuesto', { proformaId });
+export const pdfPresupuestoXubio = (proformaId) => accionXubio('pdf-presupuesto', { proformaId });
+export const estadoPresupuestoXubio = (proformaId, estado) => accionXubio('estado-presupuesto', { proformaId, estado });
+
+export async function leerPresupuestosXubio(proformaIds) {
+  if (!proformaIds.length) return {};
+  const filas = ok(await supabase.from('xubio_presupuestos').select('*').in('proforma_id', proformaIds));
+  return Object.fromEntries(filas.map((f) => [f.proforma_id, f]));
+}
