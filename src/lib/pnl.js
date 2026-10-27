@@ -198,3 +198,22 @@ export function totalesPnl(filas) {
   return Object.fromEntries(campos.map((k) => [k, filas.reduce((s, f) => s + f[k], 0)]));
 }
 
+
+/**
+ * Participación de Sergio por año calendario: se devenga mes a mes (provisión) y se cierra por año;
+ * se paga con el cierre de balance. Cada período se imputa al año de su mes (el primero, que incluye
+ * los días de octubre, va a ese mismo año).
+ */
+export function participacionPorAnio(filas) {
+  const anios = {};
+  for (const f of filas) {
+    const anio = f.mes.slice(0, 4);
+    anios[anio] ??= { anio, devengado: 0, real: 0, proyectado: 0, meses: 0, desde: f.desde, hasta: f.hasta };
+    const a = anios[anio];
+    a.devengado += f.participacion;
+    a[f.real ? 'real' : 'proyectado'] += f.participacion;
+    a.meses += 1;
+    a.hasta = f.hasta;
+  }
+  return Object.values(anios);
+}

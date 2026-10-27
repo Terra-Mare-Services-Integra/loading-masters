@@ -301,3 +301,7 @@ export async function borrarSueldo(mes, personaId) {
 export async function actualizarPersona(id, cambios) {
   ok(await supabase.from('personal').update(cambios).eq('id', id));
 }
+
+export async function guardarReferencia(clave, valor, descripcion = '') {
+  ok(await supabase.from('referencias').upsert({ clave, valor, ...(descripcion ? { descripcion } : {}) }));
+}

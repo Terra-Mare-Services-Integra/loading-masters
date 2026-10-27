@@ -9,7 +9,7 @@ import { armarProforma, comprimirTramos, expandirTramos } from './proforma/armar
 import { renderProforma } from './proforma/plantilla.js';
 import * as db from './datos.js';
 import { completarEscenario } from './lib/resultado.js';
-import { periodosContrato, periodosSueldos, calcularPnl, costoCapitanesMes } from './lib/pnl.js';
+import { periodosContrato, periodosSueldos, calcularPnl, costoCapitanesMes, participacionPorAnio } from './lib/pnl.js';
 
 const MENSUALES = CONTRATO_VMOS.items.filter((i) => i.tipo === 'mensual');
 const DOW = ['D', 'L', 'M', 'M', 'J', 'V', 'S'];
@@ -1269,7 +1269,7 @@ const COLUMNAS_PNL = [
   ['operacionTotal', 'Operación (incl. Sergio)'],
   ['impuestos', 'Imprev. e impuestos'],
   ['bruto', 'Resultado bruto'],
-  ['participacion', 'Particip. Sergio'],
+  ['participacion', 'Particip. Sergio (provisión)'],
   ['generacion', 'Generación TM'],
 ];
 
@@ -1355,6 +1355,8 @@ function Resultado() {
           {moneda === 'usd' && ' En USD se usa el dólar BNA del primer día hábil de cada mes (o el último conocido para los meses futuros).'}
         </p>
       </div>
+
+      <ParticipacionAnual filas={datos.filas} moneda={moneda} formato={formato} />
     </main>
   );
 }
@@ -1560,5 +1562,61 @@ function SueldoMes({ mes, onCambio }) {
       </div>
       {error && <p className="aviso error">Error: {error}</p>}
     </>
+  );
+}
+
+// Participación de Sergio: se provisiona mes a mes en el P&L, se cierra por año calendario y se paga con
+// el cierre de balance. Las fechas de pago se guardan en referencias.pagos_participacion.
+function ParticipacionAnual({ filas, moneda, formato }) {
+  const [pagos, setPagos] = useState(null);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    db.leerReferencia('pagos_participacion').then((v) => setPagos(v ?? {})).catch((e) => setError(e.message));
+  }, []);
+
+  const enMoneda = filas.map((f) => ({ ...f, participacion: moneda === 'usd' ? f.participacion / f.fx : f.participacion }));
+  const anios = participacionPorAnio(enMoneda);
+
+  async function pagar(anio, fechaPago) {
+    const nuevos = { ...pagos };
+    if (fechaPago) nuevos[anio] = fechaPago; else delete nuevos[anio];
+    setPagos(nuevos);
+    try {
+      await db.guardarReferencia('pagos_participacion', nuevos, 'Fecha de pago de la participación anual de Sergio (cierre de balance)');
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  return (
+    <section className="participacion">
+      <div className="overline">Participación de Sergio por año</div>
+      <p className="aviso">Se devenga mes a mes (provisión en el P&L), se cierra por año calendario y se paga con el cierre de balance.</p>
+      <div className="tabla-scroll">
+        <table className="tabla-ajuste">
+          <thead>
+            <tr><th>Año</th><th>Período</th><th className="n">Meses</th><th className="n">Devengado real</th><th className="n">Proyectado</th><th className="n">Total del año</th><th>Pagado el</th></tr>
+          </thead>
+          <tbody>
+            {anios.map((a) => (
+              <tr key={a.anio} className={pagos?.[a.anio] ? 'cumple' : ''}>
+                <td className="mono">{a.anio}</td>
+                <td className="mono">{fecha(a.desde)} – {fecha(a.hasta)}</td>
+                <td className="n mono">{a.meses}</td>
+                <td className="n mono">{formato(a.real)}</td>
+                <td className="n mono">{formato(a.proyectado)}</td>
+                <td className="n mono fuerte">{formato(a.devengado)}</td>
+                <td>
+                  <input type="date" value={pagos?.[a.anio] ?? ''} disabled={pagos === null || a.hasta > hoyIso()}
+                    title={a.hasta > hoyIso() ? `El año cierra el ${fecha(a.hasta)}` : ''} onChange={(e) => pagar(a.anio, e.target.value)} />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {error && <p className="aviso error">Error: {error}</p>}
+    </section>
   );
 }

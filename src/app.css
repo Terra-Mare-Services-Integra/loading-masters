@@ -281,3 +281,6 @@ td.con-origen input{ cursor:text; }
 .tabla-sueldos input[type=date]{ width:auto; text-align:left; }
 .tabla-sueldos tfoot td{ font-weight:600; background:var(--tm-surface); }
 .capitalizar{ text-transform:capitalize; }
+
+.participacion{ margin-top:40px; }
+.participacion input{ min-height:30px; padding:4px 6px; }

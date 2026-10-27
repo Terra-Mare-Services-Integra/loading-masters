@@ -107,3 +107,16 @@ test('P&L: el primer período suma octubre y noviembre de sueldos, con lo real c
   cerca(fila.capitanes, 1_707_800 * 6 / 31 + 2_000_000, 'octubre proyectado + noviembre real');
   assert.equal(fila.sueldosReales, true);
 });
+
+import { participacionPorAnio } from '../src/lib/pnl.js';
+
+test('participación de Sergio: se agrupa por año calendario, separando real y proyectado', () => {
+  const filas = [
+    { mes: '2026-11', desde: '2026-10-26', hasta: '2026-11-30', participacion: 100, real: true },
+    { mes: '2026-12', desde: '2026-12-01', hasta: '2026-12-31', participacion: 120, real: false },
+    { mes: '2027-01', desde: '2027-01-01', hasta: '2027-01-31', participacion: 130, real: false },
+  ];
+  const [a2026, a2027] = participacionPorAnio(filas);
+  assert.deepEqual([a2026.anio, a2026.devengado, a2026.real, a2026.proyectado, a2026.desde, a2026.hasta], ['2026', 220, 100, 120, '2026-10-26', '2026-12-31']);
+  assert.deepEqual([a2027.anio, a2027.devengado, a2027.meses], ['2027', 130, 1]);
+});
