@@ -11,6 +11,7 @@ import * as db from './datos.js';
 import { RUBROS, resumenGastos, gastosPorMes, montoArs, etiquetaGasto } from './lib/operacion.js';
 import { semestresContrato, cumplimiento, fraccionSemestre, bonoSemestre } from './lib/desempeno.js';
 import { completarEscenario } from './lib/resultado.js';
+import { costoMensualUsd, cronogramaCuotas, primaAnualUsd } from './lib/seguros.js';
 import { periodosContrato, periodosSueldos, calcularPnl, costoCapitanesMes, participacionPorAnio, mesesEquivalentes } from './lib/pnl.js';
 
 const MENSUALES = CONTRATO_VMOS.items.filter((i) => i.tipo === 'mensual');
@@ -145,6 +146,7 @@ function Certificacion() {
       {vista === 'sueldos' && <Sueldos />}
       {vista === 'desempeno' && <Desempeno />}
       {vista === 'operacion' && <Operacion />}
+      {vista === 'seguros' && <Seguros />}
     </>
   );
 }
@@ -159,9 +161,9 @@ function useContrato() {
     Promise.all([
       db.leerEscenarios(), db.listarFacturacionesPorMes(), db.leerPersonal(), db.leerReferencia('cargas_sociales'),
       db.leerReferencia('inicios'), db.leerAjustes(), db.leerDolarPorMes(CONTRATO_VMOS.inicioServicio.slice(0, 7)),
-      db.leerSueldosMes(), db.leerGastos(),
+      db.leerSueldosMes(), db.leerGastos(), db.leerReferencia('seguros'),
     ])
-      .then(([escenarios, facturaciones, personal, cargas, inicios, ajustes, dolar, sueldos, gastos]) => {
+      .then(([escenarios, facturaciones, personal, cargas, inicios, ajustes, dolar, sueldos, gastos, seguros]) => {
         const esperado = escenarios.esperado && completarEscenario(escenarios.esperado.supuestos);
         const arranque = escenarios.arranque && completarEscenario(escenarios.arranque.supuestos);
         if (!esperado || !arranque || !cargas) throw new Error('Faltan los supuestos o las cargas sociales en la base de datos');
@@ -178,6 +180,8 @@ function useContrato() {
           escenarios: { arranque, esperado },
           ajustes: ajustes.filter((a) => a.estado === 'aprobado'),
           inicioSeguros: inicios?.seguros ?? null,
+          inicioPleno: inicios?.operacionPlena ?? null,
+          costoSegurosUsd: seguros?.polizas ? costoMensualUsd(seguros.polizas) : null,
         });
         // Operación por mes calendario: gastos cargados y la proyección (con el factor del período).
         const mesesOperacion = periodosSueldos(esperado.mesesContrato).map((m) => {
@@ -193,7 +197,7 @@ function useContrato() {
             proyectado: { operacion: esc.operacionUsd * fx(m.mes) * meq, sergio: esc.sgFijoUsd * factor * fx(m.mes) * meq },
           };
         });
-        setDatos({ periodos, facturaciones, personal, filas, mesesSueldos, mesesOperacion, dolarUltimo: dolar.ultimo, inicios: inicios ?? {}, arranque });
+        setDatos({ periodos, facturaciones, personal, filas, mesesSueldos, mesesOperacion, dolarUltimo: dolar.ultimo, inicios: inicios ?? {}, seguros: seguros ?? { cuotas: 10, polizas: [] }, arranque });
       })
       .catch((e) => setError(e.message));
   }, [version]);
@@ -1266,9 +1270,9 @@ const MODULOS = [
   { id: 'operacion', nombre: 'Operación', desc: 'Compras y reembolsables: transporte, combustible, vivienda, EPP, Sergio' },
   { id: 'vehiculo', nombre: 'Vehículo', desc: 'Camioneta, pólizas, services' },
   { id: 'administracion', nombre: 'Administración', desc: 'Estructura TM: Xubio, Office, celulares' },
-  { id: 'seguros', nombre: 'Seguros', desc: 'RC del contrato y pólizas 1a–1c' },
+  { id: 'seguros', nombre: 'Seguros', desc: 'RC y E&O: prima anual en cuotas, facturadas con los ítems 1a–1c' },
 ];
-const ACTIVOS = ['facturaciones', 'formula', 'resultado', 'sueldos', 'desempeno', 'operacion'];
+const ACTIVOS = ['facturaciones', 'formula', 'resultado', 'sueldos', 'desempeno', 'operacion', 'seguros'];
 
 function Inicio({ onAbrir }) {
   return (
@@ -1305,6 +1309,7 @@ const COLUMNAS_PNL = [
   ['capitanes', 'Capitanes'],
   ['operacionTotal', 'Operación (incl. Sergio)'],
   ['reembolsables', 'Reembolsables'],
+  ['polizas', 'Seguros (pólizas)'],
   ['impuestos', 'Imprev. e impuestos'],
   ['bruto', 'Resultado bruto'],
   ['participacion', 'Particip. Sergio (provisión)'],
@@ -1389,6 +1394,7 @@ function Resultado() {
           {sinFecha.length > 0 && ` Sin fecha de ingreso, fuera de la proyección: ${sinFecha.map((p) => p.nombre).join(', ')}.`}
         </p>
         <p className="aviso">
+          {datos.inicios.operacionPlena && `Operación plena desde ${fecha(datos.inicios.operacionPlena)}: en los meses sin facturación cargada, tarifa y fijo de Sergio al 100 %. `}
           Seguros (ítems 1a–1c y pólizas): {datos.inicios.seguros ? `desde ${fecha(datos.inicios.seguros)}` : 'todavía no arrancaron, no se incluyen'}.
           {moneda === 'usd' && ' En USD se usa el dólar BNA del primer día hábil de cada mes (o el último conocido para los meses futuros).'}
         </p>
@@ -2121,5 +2127,123 @@ function GastosMes({ mes, datos, onCambio }) {
         </table>
       </div>
     </>
+  );
+}
+
+// ─── Seguros ─────────────────────────────────────────────────────────────────
+
+const usdFmt = (x) => `USD ${dec(x)}`;
+
+// Pólizas del contrato (RC y E&O): prima anual, inicio y cuotas. Se facturan a VMOS por los ítems 1a–1c.
+function Seguros() {
+  const { datos, error, recargar } = useContrato();
+  const [form, setForm] = useState(null);
+  const [aviso, setAviso] = useState('');
+
+  useEffect(() => {
+    if (datos) setForm({ ...datos.seguros, polizas: datos.seguros.polizas.map((p) => ({ ...p })), inicio: datos.inicios.seguros ?? '' });
+  }, [datos]);
+
+  if (!datos || !form) return <main>{error ? <p className="aviso error">Error: {error}</p> : 'Cargando…'}</main>;
+
+  const finContrato = datos.periodos.at(-1).hasta;
+  const cuotas = Number(form.cuotas) || 1;
+  const cronograma = form.inicio ? cronogramaCuotas(form.polizas, { inicio: form.inicio, hasta: finContrato, cuotas }) : [];
+  const prima = primaAnualUsd(form.polizas);
+  const fx = datos.dolarUltimo ?? datos.arranque.fx;
+  const setPoliza = (i, cambios) => setForm({ ...form, polizas: form.polizas.map((p, j) => (j === i ? { ...p, ...cambios } : p)) });
+
+  async function guardar() {
+    setAviso('');
+    try {
+      const { inicio, ...seguros } = form;
+      await db.guardarReferencia('seguros', {
+        ...seguros, cuotas, polizas: form.polizas.map((p) => ({ ...p, primaAnualUsd: Number(p.primaAnualUsd) || 0 })),
+      });
+      await db.guardarReferencia('inicios', { ...datos.inicios, seguros: inicio || null });
+      setAviso('Guardado');
+      recargar();
+    } catch (e) {
+      setAviso(`Error: ${e.message}`);
+    }
+  }
+
+  return (
+    <main>
+      <section className="encabezado">
+        <div>
+          <h1>Seguros.</h1>
+          <div className="filete" />
+          <p className="aviso">
+            Pólizas anuales del contrato, pagadas en cuotas. En el Resultado la prima se imputa 1/12 por mes; acá ves cuándo se paga.
+            {datos.inicios.seguros && datos.inicios.seguros > hoyIso() && ' Todavía no arrancaron: es una proyección.'}
+          </p>
+        </div>
+      </section>
+
+      <section className="tarjeta">
+        <div className="overline">Pólizas</div>
+        <div className="campos">
+          <label>Inicio de la vigencia
+            <input type="date" value={form.inicio} onChange={(e) => setForm({ ...form, inicio: e.target.value })} />
+          </label>
+          <label>Cuotas por año
+            <input type="number" min="1" max="12" value={form.cuotas} onChange={(e) => setForm({ ...form, cuotas: e.target.value })} />
+          </label>
+        </div>
+        <div className="tabla-scroll">
+          <table className="tabla-ajuste">
+            <thead><tr><th>Póliza</th><th>Prima anual (USD)</th><th>Por mes en el Resultado</th><th>Cuota</th></tr></thead>
+            <tbody>
+              {form.polizas.map((p, i) => (
+                <tr key={p.id}>
+                  <td>{p.nombre}</td>
+                  <td><input type="number" min="0" step="0.01" className="mono" value={p.primaAnualUsd}
+                    onChange={(e) => setPoliza(i, { primaAnualUsd: e.target.value })} /></td>
+                  <td className="n mono">{usdFmt(Number(p.primaAnualUsd || 0) / 12)}</td>
+                  <td className="n mono">{usdFmt(Number(p.primaAnualUsd || 0) / cuotas)}</td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr><td>Total</td><td className="n mono">{usdFmt(prima)}</td><td className="n mono">{usdFmt(prima / 12)}</td><td className="n mono">{usdFmt(prima / cuotas)}</td></tr>
+            </tfoot>
+          </table>
+        </div>
+        <div className="acciones">
+          <button type="button" onClick={guardar}>Guardar</button>
+          {aviso && <span className={`ayuda ${aviso.startsWith('Error') ? 'error' : ''}`}>{aviso}</span>}
+        </div>
+        <p className="ayuda">
+          Se facturan a VMOS todos los meses con los ítems {MENSUALES.filter((i) => i.codigo !== '1').map((i) => `${i.codigo} (${i.descripcion.replace('Adicional - ', '')})`).join(', ')}.
+        </p>
+      </section>
+
+      {cronograma.length > 0 && (
+        <section className="tarjeta">
+          <div className="overline">Cuotas a pagar</div>
+          <p className="ayuda">Primera cuota en el mes de inicio de cada vigencia. En pesos, al dólar de hoy ({pesos(fx)}).</p>
+          <div className="tabla-scroll">
+            <table className="tabla-ajuste">
+              <thead>
+                <tr><th>Mes</th><th>Vigencia</th><th>Cuota</th>{form.polizas.map((p) => <th key={p.id}>{p.corto ?? p.nombre}</th>)}<th>Total USD</th><th>Total $</th></tr>
+              </thead>
+              <tbody>
+                {cronograma.map((c) => (
+                  <tr key={`${c.vigencia}-${c.cuota}`}>
+                    <td>{nombreMes(c.mes)}</td>
+                    <td className="n mono">{c.vigencia}</td>
+                    <td className="n mono">{c.cuota}/{cuotas}</td>
+                    {form.polizas.map((p) => <td key={p.id} className="n mono">{dec(c.porPoliza[p.id])}</td>)}
+                    <td className="n mono">{dec(c.totalUsd)}</td>
+                    <td className="n mono">{pesos(c.totalUsd * fx)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+    </main>
   );
 }

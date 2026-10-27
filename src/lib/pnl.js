@@ -107,6 +107,7 @@ export function costoCapitanesMes(periodoMes, personal, cargas, tc, reales = {})
   };
 }
 
+const ITEMS_SEGUROS = ['1a', '1b', '1c'];
 const estado = (f) => (f?.cobradaEl ? 'cobrado' : f?.facturaEmitidaEl ? 'facturado' : 'proyeccion');
 
 /**
@@ -120,10 +121,12 @@ const estado = (f) => (f?.cobradaEl ? 'cobrado' : f?.facturaEmitidaEl ? 'factura
  * @param {object[]} p.ajustes             ajustes de precio aprobados
  * @param {(mes: string) => number} p.fx   tipo de cambio ARS/USD de cada mes
  * @param {string|null} p.inicioSeguros    desde cuándo se facturan y pagan las pólizas (null = todavía no)
+ * @param {string|null} [p.inicioPleno]    desde cuándo la proyección va al 100 % (tarifa y fijo de Sergio)
+ * @param {number|null} [p.costoSegurosUsd] costo mensual de las pólizas (si no, el del escenario)
  * @param {Record<string, Record<string, number>>} [p.sueldosReales]  por mes calendario: total real por persona
  * @param {Record<string, {compras: number, sergio: number, reembolsables: number}>} [p.gastos]  gastos de operación por mes calendario
  */
-export function calcularPnl({ periodos, facturaciones, personal, cargas, escenarios, ajustes = [], fx, inicioSeguros = null, sueldosReales = {}, gastos = {} }) {
+export function calcularPnl({ periodos, facturaciones, personal, cargas, escenarios, ajustes = [], fx, inicioSeguros = null, inicioPleno = null, costoSegurosUsd = null, sueldosReales = {}, gastos = {} }) {
   // El factor de la proyección es el del último día de la última facturación cargada (p. ej. 0,75).
   const cargadas = periodos.map((p) => facturaciones[p.mes]).filter(Boolean);
   const ultima = cargadas.at(-1);
@@ -133,22 +136,25 @@ export function calcularPnl({ periodos, facturaciones, personal, cargas, escenar
   return periodos.map((periodo) => {
     const f = facturaciones[periodo.mes];
     const real = estado(f) !== 'proyeccion';
-    const factor = f?.factores?.['1']?.[periodo.hasta] ?? factorVigente;
+    // Sin facturación cargada: desde el inicio de la operación plena la proyección va al 100 %.
+    const factor = f?.factores?.['1']?.[periodo.hasta] ?? (inicioPleno && periodo.desde >= inicioPleno ? 1 : factorVigente);
     const esc = factor < 1 ? escenarios.arranque : escenarios.esperado;
     const tc = fx(periodo.mes);
     const meq = mesesEquivalentes(periodo);
     const usd = (montoUsdMes) => montoUsdMes * tc * meq;
 
     // Ingresos: la facturación cargada (emitida o en preparación) o la proyección al factor vigente.
-    const ingresoCoc = f
-      ? f.total
-      : certificar({
-        periodo,
-        factores: { 1: Object.fromEntries(rangoDias(periodo.desde, periodo.hasta).map((d) => [d, factor])) },
-        precios: (d) => preciosEnFecha(ajustes, d),
-      }).total;
+    // Los ítems de seguros (1a–1c) se separan del CO&C; en la proyección se facturan enteros desde el
+    // inicio de los seguros.
     const conSeguros = inicioSeguros && inicioSeguros <= periodo.hasta;
-    const ingresoSeguros = conSeguros ? usd(esc.ingresoSegurosUsd) : 0;
+    const dias = rangoDias(periodo.desde, periodo.hasta);
+    const factores = f?.factores ?? {
+      1: Object.fromEntries(dias.map((d) => [d, factor])),
+      ...Object.fromEntries(ITEMS_SEGUROS.map((c) => [c, Object.fromEntries(dias.map((d) => [d, conSeguros && d >= inicioSeguros ? 1 : 0]))])),
+    };
+    const cert = certificar({ periodo, factores, precios: (d) => preciosEnFecha(ajustes, d) });
+    const ingresoSeguros = cert.items.filter((i) => ITEMS_SEGUROS.includes(i.codigo)).reduce((s, i) => s + i.importe, 0);
+    const ingresoCoc = (f ? f.total : cert.total) - ingresoSeguros;
     const ingreso = ingresoCoc + ingresoSeguros;
 
     // Capitanes: suma de los meses calendario que abarca el período (el primero incluye octubre).
@@ -164,7 +170,9 @@ export function calcularPnl({ periodos, facturaciones, personal, cargas, escenar
       capitanes += c.total;
       sueldosReales_ ||= c.conReales;
     }
-    const polizas = conSeguros ? usd(esc.costoSegurosUsd) : 0;
+    const polizas = conSeguros
+      ? (costoSegurosUsd ?? esc.costoSegurosUsd) * tc * mesesEquivalentes(periodo, inicioSeguros)
+      : 0;
     const estructura = usd(esc.estructuraTmUsd);
     // Operación, Sergio y reembolsables por mes calendario: lo cargado en Operación reemplaza a lo
     // proyectado de ese mes (las compras y los honorarios de Sergio por separado).
