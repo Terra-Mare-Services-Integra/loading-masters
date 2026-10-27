@@ -74,11 +74,8 @@ La contraseña de la base está en `.env.local` (`SUPABASE_DB_PASSWORD`), fuera 
 ## Deploy
 
 Vercel `terracompras-projects/loading-masters`, producción en https://loading-masters.vercel.app.
-El plan Hobby no conecta repos privados de organizaciones, así que **un push no despliega solo**:
-
-```bash
-npx vercel deploy --prod --scope terracompras-projects
-```
+Conectado al repo: cada push a `main` despliega a producción y cada rama genera un preview.
+(El repo es público porque el plan Hobby de Vercel no conecta repos privados de organizaciones.)
 
 ## Emitir la proforma por línea de comandos
 
@@ -105,7 +102,7 @@ filete bajo títulos, radio 0, márgenes A4 20/18/16 mm) y el PDF sale con texto
 | 1 | Proforma en PDF con el detalle de días trabajados por ítem (carga por JSON) | ✅ hecho |
 | 2 | App web: carga de la certificación día por día (grilla tipo Excel) y emisión desde ahí | ✅ hecho |
 | 2b | Guardar certificaciones y proformas emitidas en Supabase, con login | ✅ hecho |
-| 2c | Deploy en Vercel: https://loading-masters.vercel.app | ✅ hecho (deploy manual) |
+| 2c | Deploy en Vercel: https://loading-masters.vercel.app | ✅ hecho |
 | 3 | Integración Xubio: crear el **Presupuesto** de venta y seguir su estado | pendiente |
 | 4 | Seguimiento del circuito: plazo de revisión, aprobación, factura, vencimiento de cobro | pendiente |
 | 5 | Ajuste de precios: carga mensual de índices (FENA, INDEC, BNA), alertas de disparadores, historial de precios vigentes | pendiente |
