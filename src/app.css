@@ -311,3 +311,5 @@ td.con-origen input{ cursor:text; }
 .bolita.roja{ background:#c0392b; }
 .muestra-xubio{ margin-top:16px; }
 .json-xubio{ max-height:420px; overflow:auto; font-size:12px; white-space:pre; }
+.etiqueta-xubio{ display:inline-block; margin-right:6px; padding:0 6px; border-radius:3px; font-size:11px; background:var(--tm-blue); color:#fff; }
+.selector-destino{ display:inline-flex; gap:6px; flex-wrap:wrap; }

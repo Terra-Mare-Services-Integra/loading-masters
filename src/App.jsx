@@ -168,9 +168,17 @@ function useContrato() {
     Promise.all([
       db.leerEscenarios(), db.listarFacturacionesPorMes(), db.leerPersonal(), db.leerReferencia('cargas_sociales'),
       db.leerReferencia('inicios'), db.leerAjustes(), db.leerDolarPorMes(CONTRATO_VMOS.inicioServicio.slice(0, 7)),
-      db.leerSueldosMes(), db.leerGastos(), db.leerReferencia('seguros'), db.leerGastosAdmin(), db.leerReferencia('administracion'), db.leerReferencia('personas_gastos'), db.leerReferencia('vehiculo'), db.leerUpselling(),
+      db.leerSueldosMes(), db.leerGastos(), db.leerReferencia('seguros'), db.leerGastosAdmin(), db.leerReferencia('administracion'), db.leerReferencia('personas_gastos'), db.leerReferencia('vehiculo'), db.leerUpselling(), db.leerComprasXubio(),
     ])
-      .then(([escenarios, facturaciones, personal, cargas, inicios, ajustes, dolar, sueldos, gastos, seguros, gastosAdmin, administracion, personasGastos, vehiculoRef, upselling]) => {
+      .then(([escenarios, facturaciones, personal, cargas, inicios, ajustes, dolar, sueldos, gastos, seguros, gastosAdmin, administracion, personasGastos, vehiculoRef, upselling, comprasXubio]) => {
+        // Las compras de Xubio ya clasificadas entran como gastos de su módulo (solo lectura).
+        const deXubio = (x) => ({
+          id: `xubio-${x.id}`, xubioId: x.id, origen: 'xubio', area: x.area, mes: x.mes, fecha: x.fecha, rubro: x.rubro,
+          reembolsable: false, descripcion: x.descripcion, proveedor: x.proveedor, factura_numero: x.numero, persona_id: null,
+          persona: '', moneda: 'ARS', monto: x.importe_ars, iva_pct: x.iva_pct, tipo_cambio: null, pagado_el: x.pagado_el,
+        });
+        gastos = [...gastos, ...comprasXubio.filter((x) => x.area === 'operacion').map(deXubio)];
+        gastosAdmin = [...gastosAdmin, ...comprasXubio.filter((x) => x.area === 'administracion' || x.area === 'vehiculo').map(deXubio)];
         const esperado = escenarios.esperado && completarEscenario(escenarios.esperado.supuestos);
         const arranque = escenarios.arranque && completarEscenario(escenarios.arranque.supuestos);
         if (!esperado || !arranque || !cargas) throw new Error('Faltan los supuestos o las cargas sociales en la base de datos');
@@ -1313,7 +1321,7 @@ const MODULOS = [
   { id: 'vehiculo', nombre: 'Vehículo', desc: 'Camioneta: amortización, póliza, services, patente, combustible' },
   { id: 'administracion', nombre: 'Administración', desc: 'Sistemas de sueldos y contable, telefonía, licencias, honorarios' },
   { id: 'upselling', nombre: 'Up selling', desc: 'Trabajos que se cobran aparte (ingreso y costo) y reembolsables' },
-  { id: 'xubio', nombre: 'Xubio', desc: 'Conexión con Xubio: diagnóstico de OC, facturas de compra y pagos' },
+  { id: 'xubio', nombre: 'Xubio', desc: 'Facturas de compra del proyecto: actualizar y clasificar' },
   { id: 'seguros', nombre: 'Seguros', desc: 'RC y E&O: prima anual en cuotas, facturadas con los ítems 1a–1c' },
 ];
 const ACTIVOS = ['facturaciones', 'formula', 'resultado', 'sueldos', 'desempeno', 'operacion', 'vehiculo', 'administracion', 'seguros', 'upselling', 'xubio'];
@@ -2051,7 +2059,9 @@ function GastosMes({ mes, datos, onCambio }) {
 
   async function actualizar(g, cambios) {
     try {
-      const f = await db.guardarGasto({ ...g, ...cambios });
+      const f = g.origen === 'xubio'
+        ? (await db.actualizarCompraXubio(g.xubioId, cambios), { ...g, ...cambios })
+        : await db.guardarGasto({ ...g, ...cambios });
       setGastos((gs) => gs.map((x) => (x.id === g.id ? { ...x, ...f, monto: Number(f.monto), iva_pct: Number(f.iva_pct) } : x)));
       onCambio();
     } catch (e) {
@@ -2060,6 +2070,7 @@ function GastosMes({ mes, datos, onCambio }) {
   }
 
   async function borrar(g) {
+    if (g.origen === 'xubio') return setError('Este gasto viene de Xubio: se corrige o se borra en Xubio.');
     if (g.facturado_en) return setError('Ese reembolsable ya está incluido en una facturación: no se puede borrar.');
     if (!confirm(`¿Borrar "${etiquetaGasto(g)} · ${g.descripcion || g.proveedor}"?`)) return;
     try {
@@ -2192,7 +2203,7 @@ function GastosMes({ mes, datos, onCambio }) {
               <tr key={g.id} className={g.reembolsable ? 'reembolsable' : ''}>
                 <td className="mono">{fecha(g.fecha)}</td>
                 <td>{etiquetaGasto(g)}</td>
-                <td>{g.descripcion}{nombrePersona(g) && <span className="ayuda"> · {nombrePersona(g)}</span>}</td>
+                <td>{g.origen === 'xubio' && <span className="etiqueta-xubio">Xubio</span>}{g.descripcion}{nombrePersona(g) && <span className="ayuda"> · {nombrePersona(g)}</span>}</td>
                 <td>{g.proveedor}{g.factura_numero && <span className="ayuda"> · {g.factura_numero}</span>}</td>
                 <td className="n mono">{g.moneda === 'USD' ? `USD ${dec(g.monto, 2)}` : pesos(g.monto)}{g.moneda === 'USD' && <div className="ayuda">TC {dec(g.tipo_cambio, 2)}</div>}</td>
                 <td className="n mono fuerte">{pesos(montoArs(g))}</td>
@@ -2589,7 +2600,9 @@ function GastosFijosMes({ area, mes, anterior, datos, onCambio }) {
 
   async function actualizar(g, cambios) {
     try {
-      const f = await db.guardarGastoAdmin({ ...g, ...cambios });
+      const f = g.origen === 'xubio'
+        ? (await db.actualizarCompraXubio(g.xubioId, cambios), { ...g, ...cambios })
+        : await db.guardarGastoAdmin({ ...g, ...cambios });
       setGastos((gs) => gs.map((x) => (x.id === g.id ? numeros({ ...x, ...f }) : x)));
       onCambio();
     } catch (e) {
@@ -2598,6 +2611,7 @@ function GastosFijosMes({ area, mes, anterior, datos, onCambio }) {
   }
 
   async function borrar(g) {
+    if (g.origen === 'xubio') return setError('Este gasto viene de Xubio: se corrige o se borra en Xubio.');
     if (!confirm(`¿Borrar "${nombreRubroDe(area, g.rubro)} · ${g.descripcion || g.proveedor}"?`)) return;
     try {
       await db.borrarGastoAdmin(g.id);
@@ -2690,7 +2704,7 @@ function GastosFijosMes({ area, mes, anterior, datos, onCambio }) {
               <tr key={g.id}>
                 <td className="mono">{fecha(g.fecha)}</td>
                 <td>{nombreRubroDe(area, g.rubro)}</td>
-                <td>{g.descripcion}</td>
+                <td>{g.origen === 'xubio' && <span className="etiqueta-xubio">Xubio</span>}{g.descripcion}</td>
                 <td>{g.proveedor}{g.factura_numero && <span className="ayuda"> · {g.factura_numero}</span>}</td>
                 <td className="n mono">{g.moneda === 'USD' ? `USD ${dec(g.monto, 2)}` : pesos(g.monto)}{g.moneda === 'USD' && <div className="ayuda">TC {dec(g.tipo_cambio, 2)}</div>}</td>
                 <td className="n mono fuerte">{pesos(montoArs(g))}</td>
@@ -2883,13 +2897,17 @@ function Xubio() {
           <h1>Xubio.</h1>
           <div className="filete" />
           <p className="aviso">
-            Diagnóstico de la conexión: prueba el acceso y trae una muestra de órdenes de compra, facturas de compra y pagos
-            tal como los devuelve Xubio. No guarda nada en la app.
+            Las facturas de compra cargadas en Xubio con el centro de costo del proyecto entran solas como gastos de Operación,
+            Administración o Vehículo, según cómo clasifiques cada producto. No hace falta cargarlas dos veces.
           </p>
         </div>
       </section>
 
+      <ComprasXubio />
+
       <section className="tarjeta">
+        <div className="overline">Diagnóstico de la conexión</div>
+        <p className="ayuda">Prueba el acceso y trae una muestra de órdenes de compra, facturas de compra y pagos tal como los devuelve Xubio. No guarda nada.</p>
         <div className="campos">
           <label>Desde<input type="date" value={desde} onChange={(e) => setDesde(e.target.value)} /></label>
           <label>Hasta<input type="date" value={hasta} onChange={(e) => setHasta(e.target.value)} /></label>
@@ -2943,5 +2961,190 @@ function Xubio() {
         </>
       )}
     </main>
+  );
+}
+
+// Destinos de una compra de Xubio: el módulo de la app y sus rubros.
+const DESTINOS_XUBIO = {
+  operacion: { nombre: 'Operación', rubros: RUBROS },
+  administracion: { nombre: 'Administración', rubros: RUBROS_ADMIN },
+  vehiculo: { nombre: 'Vehículo', rubros: RUBROS_VEHICULO },
+  excluido: { nombre: 'No va al proyecto', rubros: [] },
+};
+const destinoTexto = (area, rubro) => (area
+  ? `${DESTINOS_XUBIO[area].nombre}${rubro ? ` · ${DESTINOS_XUBIO[area].rubros.find((r) => r.id === rubro)?.nombre ?? rubro}` : ''}`
+  : 'Por clasificar');
+
+// Elegir módulo y rubro (el rubro depende del módulo).
+function SelectorDestino({ area, rubro, onCambio }) {
+  const rubros = area ? DESTINOS_XUBIO[area].rubros : [];
+  return (
+    <span className="selector-destino">
+      <select value={area ?? ''} onChange={(e) => onCambio(e.target.value || null, DESTINOS_XUBIO[e.target.value]?.rubros[0]?.id ?? null)}>
+        <option value="">Por clasificar</option>
+        {Object.entries(DESTINOS_XUBIO).map(([k, d]) => <option key={k} value={k}>{d.nombre}</option>)}
+      </select>
+      {rubros.length > 0 && (
+        <select value={rubro ?? ''} onChange={(e) => onCambio(area, e.target.value)}>
+          {rubros.map((r) => <option key={r.id} value={r.id}>{r.nombre}</option>)}
+        </select>
+      )}
+    </span>
+  );
+}
+
+// Compras traídas de Xubio: actualizar, clasificar por producto y revisar renglón por renglón.
+function ComprasXubio() {
+  const [compras, setCompras] = useState(null);
+  const [mapeo, setMapeo] = useState([]);
+  const [sync, setSync] = useState(null);
+  const [borradores, setBorradores] = useState({});
+  const [actualizando, setActualizando] = useState(false);
+  const [error, setError] = useState('');
+
+  async function cargar() {
+    try {
+      const [c, m, s] = await Promise.all([db.leerComprasXubio(), db.leerMapeoXubio(), db.leerReferencia('xubio_sync')]);
+      setCompras(c);
+      setMapeo(m);
+      setSync(s);
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+  useEffect(() => { cargar(); }, []);
+
+  async function actualizar() {
+    setActualizando(true);
+    setError('');
+    try {
+      await db.sincronizarXubio();
+      await cargar();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setActualizando(false);
+    }
+  }
+
+  async function clasificarProducto(producto, area, rubro) {
+    try {
+      await db.guardarMapeoXubio(producto, area, rubro);
+      setBorradores(({ [producto]: _, ...resto }) => resto);
+      await cargar();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  async function clasificarRenglon(id, area, rubro) {
+    try {
+      await db.clasificarCompraXubio(id, area, rubro);
+      await cargar();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  if (!compras) return <section className="tarjeta">{error ? <p className="aviso error">Error: {error}</p> : 'Cargando compras de Xubio…'}</section>;
+
+  // Productos sin clasificar, agrupados.
+  const pendientes = Object.values(compras.filter((c) => !c.area).reduce((acc, c) => {
+    const p = (acc[c.producto_base] ??= { producto: c.producto_base, cantidad: 0, total: 0, proveedores: new Set() });
+    p.cantidad += 1;
+    p.total += c.importe_ars;
+    p.proveedores.add(c.proveedor);
+    return acc;
+  }, {}));
+
+  return (
+    <>
+      <section className="tarjeta">
+        <div className="ventana-cabeza">
+          <div className="overline">Compras de Xubio · centro de costo del proyecto</div>
+          <button type="button" onClick={actualizar} disabled={actualizando}>{actualizando ? 'Actualizando…' : 'Actualizar desde Xubio'}</button>
+        </div>
+        <p className="ayuda">
+          {sync
+            ? <>Última actualización: {hora.format(new Date(sync.at))}{sync.ok
+              ? ` · ${sync.facturas} facturas desde ${fecha(sync.desde)}, ${sync.renglones} renglones de ${sync.centroDeCosto}${sync.porClasificar ? ` · ${sync.porClasificar} por clasificar` : ''}.`
+              : <span className="error"> · Error: {sync.error}</span>}</>
+            : 'Todavía no se actualizó.'}
+          {' '}Se actualiza solo todos los días a las 8:00. Los montos son sin IVA; la fecha de pago se carga en cada módulo.
+        </p>
+        {error && <p className="aviso error">Error: {error}</p>}
+      </section>
+
+      {pendientes.length > 0 && (
+        <section className="tarjeta">
+          <div className="overline">Por clasificar</div>
+          <p className="ayuda">Elegí a qué módulo y rubro va cada producto. Se recuerda para las próximas facturas con ese producto.</p>
+          <div className="tabla-scroll">
+            <table className="tabla-ajuste">
+              <thead><tr><th>Producto</th><th>Proveedores</th><th className="n">Renglones</th><th className="n">Total sin IVA</th><th>Destino</th><th /></tr></thead>
+              <tbody>
+                {pendientes.map((p) => {
+                  const b = borradores[p.producto] ?? { area: null, rubro: null };
+                  return (
+                    <tr key={p.producto}>
+                      <td>{p.producto || '(sin producto)'}</td>
+                      <td className="ayuda">{[...p.proveedores].join(', ')}</td>
+                      <td className="n mono">{p.cantidad}</td>
+                      <td className="n mono">{pesos(p.total)}</td>
+                      <td><SelectorDestino area={b.area} rubro={b.rubro} onCambio={(area, rubro) => setBorradores({ ...borradores, [p.producto]: { area, rubro } })} /></td>
+                      <td><button type="button" className="chico" disabled={!b.area} onClick={() => clasificarProducto(p.producto, b.area, b.rubro)}>Guardar</button></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      {mapeo.length > 0 && (
+        <details className="tarjeta">
+          <summary>Clasificación por producto ({mapeo.length})</summary>
+          <div className="tabla-scroll">
+            <table className="tabla-ajuste">
+              <thead><tr><th>Producto</th><th>Destino</th></tr></thead>
+              <tbody>
+                {mapeo.map((m) => (
+                  <tr key={m.producto_base}>
+                    <td>{m.producto_base}</td>
+                    <td><SelectorDestino area={m.area} rubro={m.rubro} onCambio={(area, rubro) => area && clasificarProducto(m.producto_base, area, rubro)} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </details>
+      )}
+
+      <details className="tarjeta">
+        <summary>Renglones importados ({compras.length})</summary>
+        <p className="ayuda">Para mandar un renglón puntual a otro módulo o rubro, cambialo acá; queda fijo aunque cambie la clasificación del producto.</p>
+        <div className="tabla-scroll">
+          <table className="tabla-sueldos gastos">
+            <thead><tr><th>Fecha</th><th>Factura</th><th>Proveedor</th><th>Producto · descripción</th><th className="n">Sin IVA</th><th>Destino</th></tr></thead>
+            <tbody>
+              {[...compras].reverse().map((c) => (
+                <tr key={c.id}>
+                  <td className="mono">{fecha(c.fecha)}</td>
+                  <td className="mono">{c.numero}</td>
+                  <td>{c.proveedor}</td>
+                  <td>{c.producto}{c.descripcion && <span className="ayuda"> · {c.descripcion}</span>}</td>
+                  <td className="n mono">{pesos(c.importe_ars)}{c.cotizacion && <div className="ayuda">{c.moneda} · TC {dec(Number(c.cotizacion))}</div>}</td>
+                  <td>
+                    <SelectorDestino area={c.area} rubro={c.rubro} onCambio={(area, rubro) => clasificarRenglon(c.id, area, rubro)} />
+                    {c.manual && <span className="ayuda"> (a mano)</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </details>
+    </>
   );
 }

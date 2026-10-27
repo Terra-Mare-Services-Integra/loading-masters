@@ -410,3 +410,35 @@ export async function diagnosticoXubio(desde, hasta) {
   if (error) throw new Error(data?.error ?? error.message);
   return data;
 }
+
+// Trae de Xubio las facturas de compra del proyecto (mismo proceso que el cron diario).
+export async function sincronizarXubio(desde, hasta) {
+  const { data, error } = await supabase.functions.invoke('xubio', { body: { accion: 'sincronizar-compras', desde, hasta } });
+  if (error) throw new Error(data?.error ?? error.message);
+  return data;
+}
+
+export async function leerComprasXubio() {
+  return ok(await supabase.from('xubio_compras').select('*').order('fecha').order('id'))
+    .map((x) => ({ ...x, importe: Number(x.importe), importe_ars: Number(x.importe_ars), iva_pct: Number(x.iva_pct) }));
+}
+
+export async function leerMapeoXubio() {
+  return ok(await supabase.from('xubio_mapeo').select('*').order('producto_base'));
+}
+
+// Clasifica un producto: guarda el mapeo y lo aplica a sus renglones (salvo los clasificados a mano).
+export async function guardarMapeoXubio(productoBase, area, rubro) {
+  ok(await supabase.from('xubio_mapeo').upsert({ producto_base: productoBase, area, rubro }));
+  ok(await supabase.from('xubio_compras').update({ area, rubro }).eq('producto_base', productoBase).eq('manual', false));
+}
+
+// Clasificación de un renglón puntual (queda fijo aunque cambie el mapeo del producto).
+export async function clasificarCompraXubio(id, area, rubro) {
+  ok(await supabase.from('xubio_compras').update({ area, rubro, manual: Boolean(area) }).eq('id', id));
+}
+
+// Solo lo que maneja la app (por ahora, la fecha de pago).
+export async function actualizarCompraXubio(id, { pagado_el }) {
+  ok(await supabase.from('xubio_compras').update({ pagado_el: pagado_el || null }).eq('id', id));
+}
