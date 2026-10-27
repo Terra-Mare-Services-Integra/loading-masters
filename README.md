@@ -32,13 +32,30 @@ revisión hasta el 27/11, factura el 30/11, vencimiento de pago el 30/12
 npm test
 ```
 
+## Emitir la proforma
+
+1. Copiar `certificaciones/2026-11.json` como `certificaciones/AAAA-MM.json` (mes de cierre) y cargar
+   los tramos de cada ítem: `{ "desde", "hasta", "factor" }`. Los días sin tramo cuentan 0.
+2. Generar el PDF (usa el Chrome o Edge instalado; `CHROME_PATH` para otro):
+
+```bash
+npm run proforma -- certificaciones/2026-11.json
+```
+
+Deja `salidas/<numero>.pdf` (y el `.html`). Página 1: emisor/cliente, resumen por ítem con costo
+diario y días equivalentes, neto + IVA 21 % + total, y el circuito proforma → revisión → factura →
+pago. Página 2: detalle día por día del factor de cada ítem.
+
+El diseño sigue el TERRAMARE Design System (Jost / Montserrat / IBM Plex Mono, azul `#235C96`,
+filete bajo títulos, radio 0, márgenes A4 20/18/16 mm) y el PDF sale con texto nativo, no imagen.
+
 ## Etapas
 
 | # | Etapa | Estado |
 |---|-------|--------|
 | 0 | Motor de cálculo: tarifario, certificación, calendario de cobro, fórmula de ajuste | ✅ hecho |
-| 1 | App web: carga de la certificación día por día (grilla tipo Excel) y vista del total | pendiente |
-| 2 | Proforma en PDF con el detalle de días trabajados por ítem | pendiente |
+| 1 | Proforma en PDF con el detalle de días trabajados por ítem (carga por JSON) | ✅ hecho |
+| 2 | App web: carga de la certificación día por día (grilla tipo Excel) y emisión desde ahí | pendiente |
 | 3 | Integración Xubio: crear el **Presupuesto** de venta y seguir su estado | pendiente |
 | 4 | Seguimiento del circuito: plazo de revisión, aprobación, factura, vencimiento de cobro | pendiente |
 | 5 | Ajuste de precios: carga mensual de índices (FENA, INDEC, BNA), alertas de disparadores, historial de precios vigentes | pendiente |

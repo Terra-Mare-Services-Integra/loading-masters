@@ -4,6 +4,10 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "proforma": "node scripts/proforma.js"
+  },
+  "devDependencies": {
+    "puppeteer-core": "^24.43.1"
   }
 }
