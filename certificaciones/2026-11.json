@@ -5,10 +5,16 @@
   "fechaProforma": "2026-11-20",
   "numero": "PF-2026-11",
   "tramos": {
-    "1": [{ "desde": "2026-10-26", "hasta": "2026-11-30", "factor": 0.75 }]
+    "1": [
+      {
+        "desde": "2026-10-26",
+        "hasta": "2026-11-30",
+        "factor": 0.75
+      }
+    ]
   },
   "feriados": [],
   "observaciones": [
-    "Inicio del contrato: 26/10/2026. Ítem 1 al 0,75: dotación de 3 capitanes. Adicionales 1a, 1b y 1c no prestados en el período."
+    "Inicio del contrato: 26/10/2026. Ítem 1 al 75 % del Precio según cláusula 4.2, hasta la presentación y verificación de la nómina completa de CO&C (cláusula 3.3). Adicionales 1a, 1b y 1c no prestados en el período."
   ]
 }
