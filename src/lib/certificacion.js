@@ -36,7 +36,8 @@ export function costoDiario(precioMensual, fecha, divisor) {
  *   Por código de ítem, factor diario por fecha (1 = servicio completo, 0.75 = 3 capitanes...).
  *   Fechas ausentes cuentan como 0.
  * @param {Record<string, number>} [p.reembolsables] Gastos a reembolsar por código de ítem (sin fee).
- * @param {Record<string, number>} [p.precios] Precios mensuales vigentes (tras ajustes) por código.
+ * @param {Record<string, number> | ((fecha: string) => Record<string, number>)} [p.precios]
+ *   Precios mensuales por código, fijos o según la fecha (ajustes que rigen desde un día).
  * @param {number} [p.divisor] Divisor fijo de días (p. ej. 31 como el Excel original). Por defecto,
  *   los días del mes calendario de cada fecha.
  */
@@ -48,18 +49,23 @@ export function certificar({ periodo, factores, reembolsables = {}, precios = {}
       const gasto = reembolsables[item.codigo] ?? 0;
       return { ...item, gasto, importe: redondear(gasto * item.fee) };
     }
-    const precioMensual = precios[item.codigo] ?? item.precioMensual;
-    const porDia = dias.map((fecha) => ({ fecha, factor: factores[item.codigo]?.[fecha] ?? 0 }));
+    const precioEn = (fecha) => (typeof precios === 'function' ? precios(fecha) : precios)[item.codigo] ?? item.precioMensual;
+    const porDia = dias.map((fecha) => ({ fecha, factor: factores[item.codigo]?.[fecha] ?? 0, precio: precioEn(fecha) }));
     const diasEquivalentes = porDia.reduce((s, d) => s + d.factor, 0);
     // Meses equivalentes: suma de factor / días del mes de cada fecha.
-    const mesesEquivalentes = porDia.reduce((s, d) => s + d.factor / (divisor ?? diasDelMes(d.fecha)), 0);
+    const fraccion = (d) => d.factor / (divisor ?? diasDelMes(d.fecha));
+    const mesesEquivalentes = porDia.reduce((s, d) => s + fraccion(d), 0);
+    // Cada día se valoriza al precio vigente ese día (puede cambiar si rige un ajuste en el período).
+    const importe = porDia.reduce((s, d) => s + d.precio * fraccion(d), 0);
+    const preciosDistintos = [...new Set(porDia.map((d) => d.precio))];
     return {
       ...item,
-      precioMensual,
+      precioMensual: precioEn(periodo.hasta),
+      preciosDistintos,
       porDia,
       diasEquivalentes,
       mesesEquivalentes,
-      importe: redondear(precioMensual * mesesEquivalentes),
+      importe: redondear(importe),
     };
   });
 

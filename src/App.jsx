@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import logoUrl from '../assets/isologo-horizontal-azul.png';
 import { CONTRATO_VMOS } from './lib/contrato.js';
 import { periodoDeCierre } from './lib/certificacion.js';
+import { ventanasDelPeriodo, estadoVentana, evaluarVentana } from './lib/ajuste.js';
 import { rangoDias, parse, sumarDias, esHabil } from './lib/fechas.js';
 import { supabase, DOMINIOS } from './lib/supabase.js';
 import { armarProforma, comprimirTramos, expandirTramos } from './proforma/armar.js';
@@ -226,16 +227,18 @@ function Facturacion({ id, onCambioResumen }) {
   const [carga, setCarga] = useState(null);
   const [feriados, setFeriados] = useState([]);
   const [proformas, setProformas] = useState([]);
+  const [ajustes, setAjustes] = useState([]);
   // estado del guardado: cargando | guardado | pendiente | guardando | error
   const [estado, setEstado] = useState({ tipo: 'cargando' });
   const cambiosSinGuardar = useRef(false);
 
   useEffect(() => {
-    Promise.all([db.leerFacturacion(id), db.leerFeriados(), db.leerProformas(id)])
-      .then(([f, fer, pfs]) => {
+    Promise.all([db.leerFacturacion(id), db.leerFeriados(), db.leerProformas(id), db.leerAjustes()])
+      .then(([f, fer, pfs, ajs]) => {
         setCarga(f);
         setFeriados(fer);
         setProformas(pfs);
+        setAjustes(ajs);
         setEstado({ tipo: 'guardado', ...f.actualizado });
       })
       .catch((e) => setEstado({ tipo: 'error', texto: e.message }));
@@ -246,9 +249,12 @@ function Facturacion({ id, onCambioResumen }) {
   const dias = useMemo(() => (periodoValido ? rangoDias(periodo.desde, periodo.hasta) : []), [periodo, periodoValido]);
   const proforma = useMemo(
     () => carga && periodoValido && carga.fechaProforma
-      ? armarProforma({ ...carga, feriados, observaciones: lineas(carga.observaciones) })
+      ? armarProforma({
+        ...carga, feriados, observaciones: lineas(carga.observaciones),
+        ajustes: ajustes.filter((a) => a.estado === 'aprobado'),
+      })
       : null,
-    [carga, feriados, periodoValido],
+    [carga, feriados, ajustes, periodoValido],
   );
 
   // Guardado automático, 800 ms después del último cambio.
@@ -366,6 +372,8 @@ function Facturacion({ id, onCambioResumen }) {
 
             <Resumen proforma={proforma} />
           </div>
+
+          <AjustePrecios periodo={periodo} ajustes={ajustes} onCambioAjustes={async () => setAjustes(await db.leerAjustes())} />
 
           <Acciones carga={carga} feriados={feriados} onEmitir={emitir}
             onImportar={(json) => editar((c) => desdeArchivo(json, c))}
@@ -557,6 +565,13 @@ function Resumen({ proforma: p }) {
         <div><span>IVA 21 %</span><span className="mono">{pesos(p.ivaImporte)}</span></div>
         <div className="total"><span>Total {p.moneda}</span><span className="mono">{pesos(p.total)}</span></div>
       </div>
+      {p.ajustesAplicados.length > 0 && (
+        <div className="ajustes-aplicados">
+          {p.ajustesAplicados.map((a) => (
+            <div key={a.mes}>Precios ajustados (Anexo II) desde {fecha(a.rigeDesde)} · factor {dec(a.factor, 4)}</div>
+          ))}
+        </div>
+      )}
       <div className="calendario">
         <div><span className="mono">{fecha(cal.envioProforma)}</span> envío de proforma</div>
         <div><span className="mono">{fecha(cal.finRevision)}</span> fin de observaciones</div>
@@ -641,5 +656,219 @@ function Historial({ proformas }) {
         </tbody>
       </table>
     </section>
+  );
+}
+
+// ─── Ajuste de precios (Anexo II) ────────────────────────────────────────────
+// Cada facturación muestra las ventanas de pedido (días 1 a 10) que caen en su período, evalúa la
+// fórmula contra la base vigente y permite registrar el pedido y lo que resuelva VMOS.
+
+const hoyIso = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+const nombreMes = (mes) => `${MESES[Number(mes.slice(5, 7)) - 1]} ${mes.slice(0, 4)}`;
+const mesMenos = (mes, n) => {
+  const [y, m] = mes.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1 - n, 1)).toISOString().slice(0, 7);
+};
+const pctSigno = (x) => `${x >= 0 ? '+' : ''}${(x * 100).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} %`;
+const dec = (x, n = 2) => x.toLocaleString('es-AR', { minimumFractionDigits: n, maximumFractionDigits: n });
+const ESTADO_VENTANA = { abierta: 'Abierta hoy', cerrada: 'Cerrada', futura: 'Próxima' };
+const ESTADO_PEDIDO = { solicitado: 'Pedido enviado', aprobado: 'Aprobado por VMOS', rechazado: 'Rechazado por VMOS' };
+
+function AjustePrecios({ periodo, ajustes, onCambioAjustes }) {
+  const ventanas = useMemo(() => ventanasDelPeriodo(periodo), [periodo]);
+  const aprobados = ajustes.filter((a) => a.estado === 'aprobado');
+
+  return (
+    <section className="ajuste">
+      <div className="overline">Ajuste de precios · Anexo II</div>
+      <p className="aviso">
+        P1 = P0 × (70 % MO1/MO0 + 20 % IPC1/IPC0 + 10 % USD1/USD0). La revisión se pide del 1 al 10 del mes y, si VMOS
+        la acepta, rige desde el 1 del mes siguiente. Se puede pedir si el IPC o el dólar acumulan más de 15 %, si hay un
+        acuerdo gremial avalado por VMOS o si pasaron 6 meses desde la última actualización.
+      </p>
+      {ventanas.length === 0
+        ? <p className="aviso">Esta facturación no incluye ningún día 1 a 10: no tiene ventana de pedido.</p>
+        : ventanas.map((v) => (
+          <VentanaAjuste key={v.mes} ventana={v} aprobados={aprobados}
+            pedido={ajustes.find((a) => a.mes === v.mes)} onCambioAjustes={onCambioAjustes} />
+        ))}
+    </section>
+  );
+}
+
+function VentanaAjuste({ ventana, aprobados, pedido, onCambioAjustes }) {
+  const [indices, setIndices] = useState(null);
+  const [error, setError] = useState('');
+  const sinGuardar = useRef(false);
+  const hoy = hoyIso();
+  const estado = estadoVentana(ventana, hoy);
+  const [fechaPedido, setFechaPedido] = useState(estado === 'abierta' ? hoy : ventana.desde);
+  const [fechaResolucion, setFechaResolucion] = useState(hoy);
+
+  useEffect(() => {
+    db.leerIndices([ventana.mes])
+      .then((r) => setIndices(r[ventana.mes] ?? { mo: null, ipc: null, usd: null, paritaria: false }))
+      .catch((e) => setError(e.message));
+  }, [ventana.mes]);
+
+  useEffect(() => {
+    if (!sinGuardar.current || !indices) return;
+    const t = setTimeout(() => {
+      db.guardarIndices(ventana.mes, indices).then(() => { sinGuardar.current = false; }).catch((e) => setError(e.message));
+    }, 800);
+    return () => clearTimeout(t);
+  }, [indices]);
+
+  if (!indices) return <div className="ventana">{error ? `Error: ${error}` : 'Cargando índices…'}</div>;
+
+  // Un pedido ya registrado queda congelado con los índices y la base que se usaron.
+  const usados = pedido ? { ...pedido.indices, paritaria: pedido.motivos.includes('paritaria') } : indices;
+  const ev = evaluarVentana({
+    mes: ventana.mes, indices: usados, paritaria: usados.paritaria,
+    aprobados: aprobados.filter((a) => a.mes !== ventana.mes),
+  });
+  const set = (k, v) => { sinGuardar.current = true; setIndices((x) => ({ ...x, [k]: v })); };
+  const numero = (k, etiqueta, ayuda) => (
+    <label>{etiqueta}
+      <input type="number" step="any" min="0" value={indices[k] ?? ''} disabled={!!pedido}
+        onChange={(e) => set(k, e.target.value === '' ? null : Number(e.target.value))} />
+      <span className="ayuda">{ayuda}</span>
+    </label>
+  );
+
+  async function accion(fn) {
+    setError('');
+    try {
+      await fn();
+      await onCambioAjustes();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  const disparadoresTabla = [
+    ['ipc', 'IPC acumulado mayor a 15 %', ev.variaciones ? pctSigno(ev.variaciones.ipc) : '—'],
+    ['usd', 'Dólar acumulado mayor a 15 %', ev.variaciones ? pctSigno(ev.variaciones.usd) : '—'],
+    ['paritaria', 'Acuerdo gremial avalado por VMOS', usados.paritaria ? 'Sí' : 'No'],
+    ['plazo', '6 meses desde la última actualización', `${ev.mesesDesdeBase} ${ev.mesesDesdeBase === 1 ? 'mes' : 'meses'}`],
+  ];
+  const fechaPedidoValida = fechaPedido >= ventana.desde && fechaPedido <= ventana.hasta && fechaPedido <= hoy;
+  const baseTexto = ev.base.origen === 'contrato' ? `contrato (${nombreMes(ev.base.mes)})` : `ajuste de ${nombreMes(ev.base.mes)}`;
+
+  return (
+    <div className="ventana tarjeta">
+      <div className="ventana-cabeza">
+        <div>
+          <div className="ventana-titulo">Ventana {fecha(ventana.desde)} – {fecha(ventana.hasta)}</div>
+          <div className="aviso">Base: {baseTexto} · si se aprueba, rige desde {fecha(ventana.rigeDesde)}</div>
+        </div>
+        <div className="chips">
+          <span className={`chip estado-${estado}`}>{ESTADO_VENTANA[estado]}</span>
+          {pedido && <span className={`chip pedido-${pedido.estado}`}>{ESTADO_PEDIDO[pedido.estado]}</span>}
+        </div>
+      </div>
+
+      <div className="campos">
+        {numero('mo', 'MO1 · Básico Capitán de Ultramar', `FENA, ${nombreMes(ventana.mes)}`)}
+        {numero('ipc', 'IPC1 · INDEC Nivel General', `de ${nombreMes(mesMenos(ventana.mes, 2))} (n-2)`)}
+        {numero('usd', 'USD1 · BNA divisa vendedor', `primer día hábil de ${nombreMes(ventana.mes)}`)}
+        <label className="check">
+          <input type="checkbox" checked={!!indices.paritaria} disabled={!!pedido} onChange={(e) => set('paritaria', e.target.checked)} />
+          Acuerdo gremial avalado por VMOS
+        </label>
+      </div>
+
+      <div className="columnas">
+        <table className="tabla-ajuste">
+          <thead><tr><th>Componente</th><th className="n">Peso</th><th className="n">Base</th><th className="n">Actual</th><th className="n">Variación</th></tr></thead>
+          <tbody>
+            {[['mo', 'Mano de obra', 70, 2], ['ipc', 'IPC', 20, 1], ['usd', 'Dólar', 10, 2]].map(([k, n, w, d]) => (
+              <tr key={k}>
+                <td>{n}</td>
+                <td className="n mono">{w} %</td>
+                <td className="n mono">{dec(ev.base.indices[k], d)}</td>
+                <td className="n mono">{usados[k] ? dec(usados[k], d) : '—'}</td>
+                <td className="n mono">{ev.variaciones ? pctSigno(ev.variaciones[k]) : '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+
+        <table className="tabla-ajuste">
+          <thead><tr><th>Disparador</th><th className="n">Valor</th><th className="n">¿Se cumple?</th></tr></thead>
+          <tbody>
+            {disparadoresTabla.map(([k, n, v]) => (
+              <tr key={k} className={ev.motivos.includes(k) ? 'cumple' : ''}>
+                <td>{n}</td>
+                <td className="n mono">{v}</td>
+                <td className="n">{ev.motivos.includes(k) ? 'Sí' : 'No'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {ev.completo ? (
+        <div className="resultado">
+          <div><span className="etiqueta">Factor P1/P0</span> <span className="mono fuerte">{dec(ev.factor, 4)} ({pctSigno(ev.factor - 1)})</span></div>
+          <div className="precios-nuevos">
+            {Object.entries(ev.precios).map(([c, p]) => (
+              <span key={c}><span className="mono cod">{c}</span> {pesos(ev.base.precios[c])} → <span className="mono">{pesos(p)}</span></span>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <p className="aviso">Cargá los tres índices para calcular el factor.</p>
+      )}
+
+      <p className={`conclusion ${ev.habilitado ? 'si' : ''}`}>
+        {ev.habilitado
+          ? 'Se cumple al menos un disparador: corresponde pedir la revisión en esta ventana.'
+          : 'No se cumple ningún disparador: no corresponde pedir la revisión en esta ventana.'}
+      </p>
+
+      {!pedido && ev.habilitado && ev.completo && (
+        <div className="fila">
+          <label>Fecha del pedido
+            <input type="date" min={ventana.desde} max={ventana.hasta < hoy ? ventana.hasta : hoy} value={fechaPedido}
+              onChange={(e) => setFechaPedido(e.target.value)} />
+          </label>
+          <button type="button" disabled={!fechaPedidoValida} onClick={() => accion(() => db.pedirAjuste(ev, indices, fechaPedido))}>
+            Registrar pedido de revisión
+          </button>
+          {!fechaPedidoValida && (
+            <span className="aviso">
+              {estado === 'futura' ? 'La ventana todavía no abrió.' : 'El pedido tiene que estar entre el 1 y el 10, y no puede ser una fecha futura.'}
+            </span>
+          )}
+        </div>
+      )}
+
+      {pedido && (
+        <div className="fila">
+          <span className="aviso">
+            Pedido del {fecha(pedido.fechaPedido)} por {pedido.creado.por}
+            {pedido.fechaResolucion ? ` · resuelto el ${fecha(pedido.fechaResolucion)}` : ''}.
+          </span>
+          {pedido.estado === 'solicitado' ? (
+            <>
+              <label>Fecha de respuesta<input type="date" value={fechaResolucion} onChange={(e) => setFechaResolucion(e.target.value)} /></label>
+              <button type="button" onClick={() => accion(() => db.resolverAjuste(pedido.id, 'aprobado', fechaResolucion))}>VMOS aprobó</button>
+              <button type="button" className="secundario" onClick={() => accion(() => db.resolverAjuste(pedido.id, 'rechazado', fechaResolucion))}>VMOS rechazó</button>
+              <button type="button" className="terciario"
+                onClick={() => { if (confirm('¿Borrar el pedido registrado?')) accion(() => db.borrarAjuste(pedido.id)); }}>Borrar pedido</button>
+            </>
+          ) : (
+            <button type="button" className="terciario" onClick={() => accion(() => db.resolverAjuste(pedido.id, 'solicitado', null))}>
+              Volver a pendiente
+            </button>
+          )}
+        </div>
+      )}
+      {error && <p className="aviso error">Error: {error}</p>}
+    </div>
   );
 }

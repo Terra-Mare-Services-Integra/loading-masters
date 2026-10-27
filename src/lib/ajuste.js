@@ -40,3 +40,88 @@ export function vigenciaPedido(fechaPedido, ajuste = CONTRATO_VMOS.ajuste) {
   const siguiente = new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 10);
   return { enVentana: d >= desde && d <= hasta, rigeDesde: siguiente };
 }
+
+// ─── Evaluación por ventana mensual ──────────────────────────────────────────
+// Un "ajuste" aprobado guarda { mes, rigeDesde, indices, precios }: el mes de la ventana en que se
+// pidió, desde cuándo rige, los índices usados (MO1, IPC1, USD1) y los precios resultantes. Según el
+// Anexo II, esos índices y precios pasan a ser la base de la próxima revisión.
+
+const mesSiguiente = (mes) => {
+  const [y, m] = mes.split('-').map(Number);
+  return new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 7);
+};
+
+export function mesesEntre(desde, hasta) {
+  const [y1, m1] = desde.split('-').map(Number);
+  const [y2, m2] = hasta.split('-').map(Number);
+  return (y2 - y1) * 12 + (m2 - m1);
+}
+
+export function baseContrato(contrato = CONTRATO_VMOS) {
+  return {
+    mes: contrato.inicioComputo,
+    indices: contrato.ajuste.base,
+    precios: Object.fromEntries(contrato.items.filter((i) => i.tipo === 'mensual').map((i) => [i.codigo, i.precioMensual])),
+    origen: 'contrato',
+  };
+}
+
+// Base contra la que se evalúa la ventana de `mes`: el último ajuste aprobado en una ventana anterior,
+// o los valores del contrato.
+export function baseVigente(aprobados, mes, contrato = CONTRATO_VMOS) {
+  const previo = aprobados.filter((a) => a.mes < mes).sort((a, b) => a.mes.localeCompare(b.mes)).at(-1);
+  return previo ? { mes: previo.mes, indices: previo.indices, precios: previo.precios, origen: previo.id ?? previo.mes } : baseContrato(contrato);
+}
+
+// Precios mensuales vigentes en una fecha: los del último ajuste aprobado que ya rige, o los del contrato.
+export function preciosEnFecha(aprobados, fecha, contrato = CONTRATO_VMOS) {
+  const vigente = aprobados.filter((a) => a.rigeDesde <= fecha).sort((a, b) => a.rigeDesde.localeCompare(b.rigeDesde)).at(-1);
+  return vigente ? vigente.precios : baseContrato(contrato).precios;
+}
+
+// Ventanas de pedido (días 1 a 10) que caen dentro del período de una facturación.
+export function ventanasDelPeriodo(periodo, contrato = CONTRATO_VMOS) {
+  const { desde: d1, hasta: d10 } = contrato.ajuste.ventanaPedido;
+  const pad = (n) => String(n).padStart(2, '0');
+  const ventanas = [];
+  for (let mes = periodo.desde.slice(0, 7); mes <= periodo.hasta.slice(0, 7); mes = mesSiguiente(mes)) {
+    const v = { mes, desde: `${mes}-${pad(d1)}`, hasta: `${mes}-${pad(d10)}`, rigeDesde: `${mesSiguiente(mes)}-01` };
+    if (v.desde <= periodo.hasta && v.hasta >= periodo.desde && mes >= contrato.inicioComputo) ventanas.push(v);
+  }
+  return ventanas;
+}
+
+export function estadoVentana(ventana, hoy) {
+  if (hoy < ventana.desde) return 'futura';
+  if (hoy > ventana.hasta) return 'cerrada';
+  return 'abierta';
+}
+
+/**
+ * Evalúa la fórmula del Anexo II en la ventana de `mes`.
+ * @param {object} p
+ * @param {string} p.mes Mes de aplicación 'YYYY-MM'.
+ * @param {{mo?: number, ipc?: number, usd?: number}} p.indices MO1, IPC1 (n-2) y USD1 de ese mes.
+ * @param {object[]} p.aprobados Ajustes aprobados hasta hoy.
+ * @param {boolean} [p.paritaria] Acuerdo gremial avalado por VMOS que altera el costo.
+ */
+export function evaluarVentana({ mes, indices, aprobados = [], paritaria = false }, contrato = CONTRATO_VMOS) {
+  const base = baseVigente(aprobados, mes, contrato);
+  const mesesDesdeBase = mesesEntre(base.mes, mes);
+  const completo = ['mo', 'ipc', 'usd'].every((k) => Number(indices?.[k]) > 0);
+  const resultado = { mes, rigeDesde: `${mesSiguiente(mes)}-01`, base, mesesDesdeBase, completo };
+  if (!completo) {
+    const motivos = [...(paritaria ? ['paritaria'] : []), ...(mesesDesdeBase >= contrato.ajuste.disparadores.meses ? ['plazo'] : [])];
+    return { ...resultado, motivos, habilitado: motivos.length > 0 };
+  }
+  const d = disparadores(indices, base.indices, { mesesDesdeUltima: mesesDesdeBase, paritaria }, contrato.ajuste);
+  const factor = factorAjuste(indices, base.indices, contrato.ajuste);
+  return {
+    ...resultado,
+    variaciones: { mo: indices.mo / base.indices.mo - 1, ipc: d.varIpc, usd: d.varUsd },
+    motivos: d.motivos,
+    habilitado: d.habilitado,
+    factor,
+    precios: Object.fromEntries(Object.entries(base.precios).map(([c, p]) => [c, redondear(p * factor)])),
+  };
+}

@@ -30,6 +30,13 @@ observaciones de VMOS y factura el 27/11 (5 días hábiles), vencimiento de pago
   No es automático: habilita a **pedir** la revisión cuando IPC o USD acumulan más de 15%, hay un
   acuerdo paritario avalado por VMOS, o pasan 6 meses. El pedido se hace del 1 al 10 y rige desde el
   1 del mes siguiente.
+- **Ajuste en cada facturación**: la app muestra las ventanas del 1 al 10 que caen en el período,
+  con los índices del mes (MO1 de FENA, IPC1 de INDEC n-2, USD1 de BNA del primer día hábil, más la
+  casilla de acuerdo gremial), las variaciones contra la base vigente, qué disparadores se cumplen,
+  el factor y los precios nuevos. Si corresponde, se registra el pedido (solo con fecha del 1 al 10
+  y no futura) y después lo que resuelva VMOS. Un ajuste aprobado rige desde el 1 del mes siguiente:
+  cada día se valoriza al precio vigente ese día, y sus índices y precios pasan a ser la base de la
+  próxima revisión (también para contar los 6 meses).
 
 ```bash
 npm test
@@ -64,6 +71,9 @@ Proyecto propio `loading-masters` (ref `sehlulimgrxdterocaml`, sa-east-1, org In
 - `certificaciones`: una por facturación (nombre, desde, hasta, fecha de proforma y de factura);
   la app guarda sola 0,8 s después de cada cambio.
 - `feriados`: compartidos entre meses.
+- `indices`: MO1, IPC1, USD1 y acuerdo gremial por mes de aplicación.
+- `ajustes`: pedidos de revisión por ventana (solicitado / aprobado / rechazado), con los índices,
+  la base, el factor y los precios resultantes congelados al pedir.
 - `proformas`: cada emisión guarda la foto exacta de lo enviado; no se editan ni se borran, y se
   pueden reimprimir desde el historial.
 - **Acceso**: email y contraseña, con confirmación por email. Las políticas RLS solo dejan leer y
@@ -112,7 +122,7 @@ filete bajo títulos, radio 0, márgenes A4 20/18/16 mm) y el PDF sale con texto
 | 2c | Deploy en Vercel: https://loading-masters.vercel.app | ✅ hecho |
 | 3 | Integración Xubio: crear el **Presupuesto** de venta y seguir su estado | pendiente |
 | 4 | Seguimiento del circuito: plazo de revisión, aprobación, factura, vencimiento de cobro | pendiente |
-| 5 | Ajuste de precios: carga mensual de índices (FENA, INDEC, BNA), alertas de disparadores, historial de precios vigentes | pendiente |
+| 5 | Ajuste de precios: índices por mes, disparadores, pedido en ventana 1–10, aprobación y precios vigentes por fecha | ✅ hecho (índices a mano) |
 
 ### Notas para la integración con Xubio (etapa 3)
 

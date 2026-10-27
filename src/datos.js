@@ -92,3 +92,64 @@ export async function leerProformas(certificacionId) {
       .order('emitida_at', { ascending: false }),
   );
 }
+
+// ─── Ajuste de precios (Anexo II) ────────────────────────────────────────────
+
+export async function leerIndices(meses) {
+  if (!meses.length) return {};
+  const filas = ok(await supabase.from('indices').select('*').in('mes', meses));
+  return Object.fromEntries(filas.map((f) => [f.mes, {
+    mo: f.mo === null ? null : Number(f.mo),
+    ipc: f.ipc === null ? null : Number(f.ipc),
+    usd: f.usd === null ? null : Number(f.usd),
+    paritaria: f.paritaria,
+    actualizado: { at: f.updated_at, por: f.updated_by },
+  }]));
+}
+
+export async function guardarIndices(mes, { mo, ipc, usd, paritaria }) {
+  ok(await supabase.from('indices').upsert({ mes, mo: mo || null, ipc: ipc || null, usd: usd || null, paritaria: !!paritaria }));
+}
+
+const ajusteDesdeFila = (f) => ({
+  id: f.id,
+  mes: f.mes,
+  fechaPedido: f.fecha_pedido,
+  rigeDesde: f.rige_desde,
+  estado: f.estado,
+  fechaResolucion: f.fecha_resolucion,
+  indices: f.indices,
+  base: f.base,
+  factor: Number(f.factor),
+  precios: f.precios,
+  motivos: f.motivos,
+  notas: f.notas,
+  creado: { at: f.created_at, por: f.created_by },
+});
+
+export async function leerAjustes() {
+  return ok(await supabase.from('ajustes').select('*').order('mes')).map(ajusteDesdeFila);
+}
+
+export async function pedirAjuste(evaluacion, indices, fechaPedido) {
+  return ajusteDesdeFila(ok(await supabase.from('ajustes').insert({
+    mes: evaluacion.mes,
+    fecha_pedido: fechaPedido,
+    rige_desde: evaluacion.rigeDesde,
+    indices: { mo: indices.mo, ipc: indices.ipc, usd: indices.usd },
+    base: { mes: evaluacion.base.mes, indices: evaluacion.base.indices, precios: evaluacion.base.precios },
+    factor: evaluacion.factor,
+    precios: evaluacion.precios,
+    motivos: evaluacion.motivos,
+  }).select('*').single()));
+}
+
+export async function resolverAjuste(id, estado, fecha) {
+  return ajusteDesdeFila(ok(await supabase.from('ajustes')
+    .update({ estado, fecha_resolucion: estado === 'solicitado' ? null : fecha })
+    .eq('id', id).select('*').single()));
+}
+
+export async function borrarAjuste(id) {
+  ok(await supabase.from('ajustes').delete().eq('id', id));
+}

@@ -1,5 +1,6 @@
 import { CONTRATO_VMOS } from '../lib/contrato.js';
 import { certificar, calendarioCobro, periodoDeCierre } from '../lib/certificacion.js';
+import { preciosEnFecha } from '../lib/ajuste.js';
 import { rangoDias, sumarDias } from '../lib/fechas.js';
 
 export const EMISOR = {
@@ -50,11 +51,19 @@ export function comprimirTramos(porFecha, periodo) {
  * @param {Record<string, number>} [carga.reembolsables]
  * @param {string[]} [carga.feriados]
  * @param {number} [carga.iva] Alícuota de IVA (0,21 por defecto).
+ * @param {object[]} [carga.ajustes] Ajustes de precio aprobados ({ mes, rigeDesde, factor, precios }).
  */
 export function armarProforma(carga, contrato = CONTRATO_VMOS) {
   const periodo = carga.desde ? { desde: carga.desde, hasta: carga.hasta } : periodoDeCierre(carga.cierre, contrato);
   const factores = carga.factores ?? Object.fromEntries(Object.entries(carga.tramos ?? {}).map(([c, t]) => [c, expandirTramos(t)]));
-  const cert = certificar({ periodo, factores, reembolsables: carga.reembolsables, precios: carga.precios }, contrato);
+  const aprobados = carga.ajustes ?? [];
+  const precios = carga.precios ?? ((fecha) => preciosEnFecha(aprobados, fecha, contrato));
+  const cert = certificar({ periodo, factores, reembolsables: carga.reembolsables, precios }, contrato);
+  // Ajustes que rigen en algún día del período (el vigente al inicio y los que arrancan dentro).
+  const vigenteAlInicio = aprobados.filter((a) => a.rigeDesde <= periodo.desde).sort((a, b) => a.rigeDesde.localeCompare(b.rigeDesde)).at(-1);
+  const ajustesAplicados = aprobados
+    .filter((a) => a === vigenteAlInicio || (a.rigeDesde > periodo.desde && a.rigeDesde <= periodo.hasta))
+    .map(({ mes, rigeDesde, factor }) => ({ mes, rigeDesde, factor }));
   const iva = carga.iva ?? 0.21;
   const ivaImporte = Math.round(cert.total * iva * 100) / 100;
   const fechaProforma = carga.fechaProforma ?? carga.fechaEmision ?? periodo.hasta;
@@ -72,6 +81,7 @@ export function armarProforma(carga, contrato = CONTRATO_VMOS) {
     iva,
     ivaImporte,
     total: Math.round((cert.total + ivaImporte) * 100) / 100,
+    ajustesAplicados,
     calendario: calendarioCobro(fechaProforma, { feriados: carga.feriados ?? [], factura: carga.fechaFactura || undefined }, contrato),
     plazos: contrato.plazos,
     observaciones: carga.observaciones ?? [],

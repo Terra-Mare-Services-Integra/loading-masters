@@ -104,7 +104,7 @@ function filaItem(it) {
   return `<tr class="${activo ? '' : 'inactivo'}">
     <td class="cod">${esc(it.codigo)}</td>
     <td class="desc">${esc(it.descripcion)}</td>
-    <td class="n">${pesos(it.precioMensual)}</td>
+    <td class="n">${pesos(it.precioMensual)}${it.preciosDistintos?.length > 1 ? '*' : ''}</td>
     <td class="n">${num.format(it.diasEquivalentes)}</td>
     <td class="n">${dec4.format(it.mesesEquivalentes)}</td>
     <td class="n fuerte">${pesos(it.importe)}</td></tr>`;
@@ -209,6 +209,7 @@ export function renderProforma(p, { logo, pie = false } = {}) {
 <div class="notas">
   <p>Costo diario = precio mensual / ${cert.divisor ? `${cert.divisor} días` : 'días del mes calendario'}; meses equivalentes = Σ factor diario / días del mes. Factor diario 1 = servicio completo; las fracciones reflejan la dotación efectivamente afectada.
   Precios en ${esc(p.moneda)}, sin IVA, según tarifario de la Oferta.</p>
+  ${(p.ajustesAplicados ?? []).map((a) => `<p>Precios ajustados según Anexo II (fórmula polinómica) vigentes desde ${fecha(a.rigeDesde)}: factor ${dec4.format(a.factor)} sobre la base anterior. Cada día se valoriza al precio vigente ese día; el precio mensual marcado con * es el vigente al cierre del período.</p>`).join('')}
   ${p.observaciones.map((o) => `<p>${esc(o)}</p>`).join('')}
 </div>
 ${tablaDiaria(cert)}

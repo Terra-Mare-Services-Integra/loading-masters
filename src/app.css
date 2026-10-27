@@ -124,3 +124,33 @@ button.chico{ padding:4px 12px; min-height:0; font-size:12px; }
   .barra{ padding:12px 16px; }
   .columnas{ grid-template-columns:1fr; }
 }
+
+/* Ajuste de precios (Anexo II) */
+.ajuste{ margin-top:48px; }
+.ajuste > .aviso{ max-width:90ch; }
+.ventana{ margin-top:16px; }
+.ventana-cabeza{ display:flex; justify-content:space-between; gap:16px; flex-wrap:wrap; }
+.ventana-titulo{ font-weight:600; font-size:16px; }
+.ventana .campos{ align-items:flex-start; }
+.ayuda{ font-weight:400; font-size:11px; color:var(--text-muted); }
+label.check{ flex-direction:row; align-items:center; gap:8px; align-self:center; }
+label.check input{ min-height:0; width:16px; height:16px; }
+.chip.estado-abierta{ border-color:#1E7A5B; color:#1E7A5B; }
+.chip.estado-futura{ border-color:var(--tm-blue); color:var(--tm-blue); }
+.chip.estado-cerrada{ color:var(--text-muted); }
+.chip.pedido-solicitado{ border-color:#C97A16; color:#C97A16; }
+.chip.pedido-aprobado{ background:#1E7A5B; border-color:#1E7A5B; color:var(--tm-white); }
+.chip.pedido-rechazado{ border-color:var(--tm-critical); color:var(--tm-critical); }
+.ventana .columnas{ margin-top:0; }
+.tabla-ajuste{ width:100%; border-collapse:collapse; background:var(--tm-white); }
+.tabla-ajuste th{ text-align:left; font-size:12px; font-weight:600; padding:6px 8px; border-bottom:1px solid var(--tm-blue-light); }
+.tabla-ajuste td{ padding:6px 8px; border-bottom:1px solid var(--border-subtle); font-size:13px; }
+.tabla-ajuste .n{ text-align:right; }
+.tabla-ajuste tr.cumple td{ color:#1E7A5B; font-weight:600; }
+.resultado{ display:flex; flex-direction:column; gap:8px; }
+.precios-nuevos{ display:flex; flex-wrap:wrap; gap:8px 24px; font-size:13px; }
+.precios-nuevos .cod{ color:var(--tm-blue); margin-right:4px; }
+.fuerte{ font-weight:600; }
+.conclusion{ margin:0; font-weight:600; color:var(--text-muted); }
+.conclusion.si{ color:#1E7A5B; }
+.ajustes-aplicados{ font-size:12px; color:var(--text-muted); border-top:1px solid var(--border-subtle); padding-top:8px; }
