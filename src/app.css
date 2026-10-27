@@ -313,3 +313,6 @@ td.con-origen input{ cursor:text; }
 .json-xubio{ max-height:420px; overflow:auto; font-size:12px; white-space:pre; }
 .etiqueta-xubio{ display:inline-block; margin-right:6px; padding:0 6px; border-radius:3px; font-size:11px; background:var(--tm-blue); color:#fff; }
 .selector-destino{ display:inline-flex; gap:6px; flex-wrap:wrap; }
+.cajitas.analisis .cajita{ min-height:120px; border-top-width:4px; }
+.grupo-cajitas{ margin-top:40px; }
+.grupo-cajitas + .cajitas{ margin-top:12px; }

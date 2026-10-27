@@ -136,7 +136,7 @@ function Ingreso() {
 function Certificacion() {
   const [vista, setVista] = useState('inicio');
   if (vista === 'inicio') return <Inicio onAbrir={setVista} />;
-  const titulo = MODULOS.find((m) => m.id === vista)?.nombre;
+  const titulo = [...ANALISIS, ...MODULOS].find((m) => m.id === vista)?.nombre;
   return (
     <>
       <div className="barra-volver">
@@ -1314,10 +1314,14 @@ const MOTIVOS = { ipc: 'IPC > 15 %', usd: 'dólar > 15 %', paritaria: 'acuerdo g
 
 // ─── Inicio en cajitas ───────────────────────────────────────────────────────
 
+// Arriba el análisis (Resultado y Dashboards); abajo los módulos donde se carga la información.
+const ANALISIS = [
+  { id: 'resultado', nombre: 'Resultado', desc: 'P&L mes a mes: real y proyectado' },
+  { id: 'dashboards', nombre: 'Dashboards', desc: 'Gráficos y análisis del contrato' },
+];
 const MODULOS = [
   { id: 'facturaciones', nombre: 'Facturación', desc: 'Un mes por cajita: certificación, proforma, factura y cobro' },
   { id: 'formula', nombre: 'Fórmula de ajuste', desc: 'Índices, base y disparadores del Anexo II' },
-  { id: 'resultado', nombre: 'Resultado', desc: 'P&L mes a mes: real y proyectado' },
   { id: 'sueldos', nombre: 'Sueldos', desc: 'Capitanes en relación de dependencia, mes a mes' },
   { id: 'desempeno', nombre: 'Desempeño', desc: 'Evaluación semestral 360° y bono de los capitanes' },
   { id: 'operacion', nombre: 'Operación', desc: 'Compras y reembolsables: transporte, combustible, vivienda, EPP, Sergio' },
@@ -1339,21 +1343,29 @@ function Inicio({ onAbrir }) {
           <div className="filete" />
         </div>
       </section>
+      <div className="cajitas analisis">
+        {ANALISIS.map((m) => <Cajita key={m.id} modulo={m} onAbrir={onAbrir} />)}
+      </div>
+      <div className="overline grupo-cajitas">Gestión</div>
       <div className="cajitas">
-        {MODULOS.map((m) => (ACTIVOS.includes(m.id) ? (
-          <button key={m.id} type="button" className="cajita" onClick={() => onAbrir(m.id)}>
-            <span className="cajita-nombre">{m.nombre}</span>
-            <span className="cajita-desc">{m.desc}</span>
-          </button>
-        ) : (
-          <div key={m.id} className="cajita apagada">
-            <span className="cajita-nombre">{m.nombre}</span>
-            <span className="cajita-desc">{m.desc}</span>
-            <span className="cajita-dato">A armar</span>
-          </div>
-        )))}
+        {MODULOS.map((m) => <Cajita key={m.id} modulo={m} onAbrir={onAbrir} />)}
       </div>
     </main>
+  );
+}
+
+function Cajita({ modulo: m, onAbrir }) {
+  return ACTIVOS.includes(m.id) ? (
+    <button type="button" className="cajita" onClick={() => onAbrir(m.id)}>
+      <span className="cajita-nombre">{m.nombre}</span>
+      <span className="cajita-desc">{m.desc}</span>
+    </button>
+  ) : (
+    <div className="cajita apagada">
+      <span className="cajita-nombre">{m.nombre}</span>
+      <span className="cajita-desc">{m.desc}</span>
+      <span className="cajita-dato">A armar</span>
+    </div>
   );
 }
 
