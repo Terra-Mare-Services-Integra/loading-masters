@@ -126,7 +126,15 @@ function tablaDiaria(cert) {
   </table>`;
 }
 
-export function renderProforma(p, { logo } = {}) {
+// Pie paginado con cajas de margen @page, para cuando se imprime desde el navegador
+// (con Puppeteer el pie lo pone footerTemplate).
+const piePagina = (numero) => `
+@page{
+  @bottom-left{ content:"TERRAMARE · Proforma ${numero}"; font-family:Montserrat,sans-serif; font-size:7pt; letter-spacing:.06em; color:#5B6672; }
+  @bottom-right{ content:counter(page) " / " counter(pages); font-family:"IBM Plex Mono",monospace; font-size:7pt; color:#5B6672; }
+}`;
+
+export function renderProforma(p, { logo, pie = false } = {}) {
   const cert = p.certificacion;
   const cal = p.calendario;
   const diasHabiles = p.plazos.diasHabilesRevisionProforma;
@@ -134,8 +142,8 @@ export function renderProforma(p, { logo } = {}) {
 
   return `<!doctype html>
 <html lang="es"><head><meta charset="utf-8">
-<title>Proforma ${esc(p.numero)}</title>
-<style>${CSS}</style></head>
+<title>${esc(p.numero)}</title>
+<style>${CSS}${pie ? piePagina(esc(p.numero)) : ''}</style></head>
 <body>
 
 <header class="cabecera">

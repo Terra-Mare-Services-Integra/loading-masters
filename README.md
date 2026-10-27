@@ -32,7 +32,27 @@ revisión hasta el 27/11, factura el 30/11, vencimiento de pago el 30/12
 npm test
 ```
 
-## Emitir la proforma
+## App de carga
+
+```bash
+npm install
+npm run dev
+```
+
+- **Mes de cierre**: elige el período (21 del mes anterior al 20). Número y fecha de emisión se
+  completan solos y se pueden editar.
+- **Completar un tramo**: ítem + desde/hasta + factor, para cargar muchos días de una vez.
+- **Grilla**: un casillero por día e ítem, como el Excel. Acepta coma o punto, entre 0 y 1;
+  fines de semana y feriados sombreados.
+- **Resumen** en vivo (días equivalentes, neto, IVA, total) y fechas del circuito de cobro.
+- **Emitir proforma PDF**: abre el diálogo de impresión con la proforma; elegir *Guardar como PDF*
+  y desmarcar *Encabezados y pies de página*. Mismo diseño que el PDF de la línea de comandos.
+- **Descargar / Importar JSON**: mismo formato que `certificaciones/*.json`.
+
+Mientras no haya base de datos, la carga de cada mes queda como borrador en el navegador (se
+pierde si se borran los datos del sitio): el respaldo es el JSON descargado.
+
+## Emitir la proforma por línea de comandos
 
 1. Copiar `certificaciones/2026-11.json` como `certificaciones/AAAA-MM.json` (mes de cierre) y cargar
    los tramos de cada ítem: `{ "desde", "hasta", "factor" }`. Los días sin tramo cuentan 0.
@@ -55,7 +75,8 @@ filete bajo títulos, radio 0, márgenes A4 20/18/16 mm) y el PDF sale con texto
 |---|-------|--------|
 | 0 | Motor de cálculo: tarifario, certificación, calendario de cobro, fórmula de ajuste | ✅ hecho |
 | 1 | Proforma en PDF con el detalle de días trabajados por ítem (carga por JSON) | ✅ hecho |
-| 2 | App web: carga de la certificación día por día (grilla tipo Excel) y emisión desde ahí | pendiente |
+| 2 | App web: carga de la certificación día por día (grilla tipo Excel) y emisión desde ahí | ✅ hecho (sin base de datos) |
+| 2b | Guardar certificaciones y proformas emitidas en Supabase, con login | pendiente |
 | 3 | Integración Xubio: crear el **Presupuesto** de venta y seguir su estado | pendiente |
 | 4 | Seguimiento del circuito: plazo de revisión, aprobación, factura, vencimiento de cobro | pendiente |
 | 5 | Ajuste de precios: carga mensual de índices (FENA, INDEC, BNA), alertas de disparadores, historial de precios vigentes | pendiente |

@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { armarProforma, expandirTramos } from '../src/proforma/armar.js';
+import { armarProforma, expandirTramos, comprimirTramos } from '../src/proforma/armar.js';
+import { periodoDeCierre } from '../src/lib/certificacion.js';
 import { renderProforma } from '../src/proforma/plantilla.js';
 
 const NOVIEMBRE = {
@@ -12,6 +13,15 @@ const NOVIEMBRE = {
 test('los tramos se expanden día por día', () => {
   const f = expandirTramos([{ desde: '2026-10-30', hasta: '2026-11-01', factor: 0.5 }]);
   assert.deepEqual(f, { '2026-10-30': 0.5, '2026-10-31': 0.5, '2026-11-01': 0.5 });
+});
+
+test('comprimir tramos es el inverso de expandir', () => {
+  const tramos = [
+    { desde: '2026-10-26', hasta: '2026-11-05', factor: 0.75 },
+    { desde: '2026-11-06', hasta: '2026-11-06', factor: 0.5 },
+    { desde: '2026-11-10', hasta: '2026-11-20', factor: 1 },
+  ];
+  assert.deepEqual(comprimirTramos(expandirTramos(tramos), periodoDeCierre('2026-11')), tramos);
 });
 
 test('proforma de noviembre: neto, IVA y total', () => {
