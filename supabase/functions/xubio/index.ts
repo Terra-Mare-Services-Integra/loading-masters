@@ -34,7 +34,8 @@ async function token() {
 
 async function xubio(tk: string, ruta: string) {
   const r = await fetch(`${BASE}${ruta}`, { headers: { Authorization: `Bearer ${tk}`, Accept: 'application/json' } });
-  const texto = await r.text();
+  // Xubio manda UTF-8 aunque el encabezado diga otra cosa: se decodifica a mano para no romper los acentos.
+  const texto = new TextDecoder('utf-8').decode(await r.arrayBuffer());
   if (!r.ok) throw new Error(`${ruta} respondió ${r.status}: ${texto.slice(0, 200)}`);
   return texto ? JSON.parse(texto) : null;
 }

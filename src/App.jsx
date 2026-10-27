@@ -168,15 +168,18 @@ function useContrato() {
     Promise.all([
       db.leerEscenarios(), db.listarFacturacionesPorMes(), db.leerPersonal(), db.leerReferencia('cargas_sociales'),
       db.leerReferencia('inicios'), db.leerAjustes(), db.leerDolarPorMes(CONTRATO_VMOS.inicioServicio.slice(0, 7)),
-      db.leerSueldosMes(), db.leerGastos(), db.leerReferencia('seguros'), db.leerGastosAdmin(), db.leerReferencia('administracion'), db.leerReferencia('personas_gastos'), db.leerReferencia('vehiculo'), db.leerUpselling(), db.leerComprasXubio(),
+      db.leerSueldosMes(), db.leerGastos(), db.leerReferencia('seguros'), db.leerGastosAdmin(), db.leerReferencia('administracion'), db.leerReferencia('personas_gastos'), db.leerReferencia('vehiculo'), db.leerUpselling(), db.leerComprasXubio(), db.leerReferencia('xubio'),
     ])
-      .then(([escenarios, facturaciones, personal, cargas, inicios, ajustes, dolar, sueldos, gastos, seguros, gastosAdmin, administracion, personasGastos, vehiculoRef, upselling, comprasXubio]) => {
-        // Las compras de Xubio ya clasificadas entran como gastos de su módulo (solo lectura).
-        const deXubio = (x) => ({
+      .then(([escenarios, facturaciones, personal, cargas, inicios, ajustes, dolar, sueldos, gastos, seguros, gastosAdmin, administracion, personasGastos, vehiculoRef, upselling, comprasXubio, configXubio]) => {
+        // Las compras de Xubio ya clasificadas entran como gastos de su módulo (solo lectura). Si no se
+        // cargó la fecha de pago, se paga sola a los N días de la factura (30 por defecto).
+        const diasPago = configXubio?.diasPago ?? 30;
+        const deXubio = (x) => pagoXubio({
           id: `xubio-${x.id}`, xubioId: x.id, origen: 'xubio', area: x.area, mes: x.mes, fecha: x.fecha, rubro: x.rubro,
           reembolsable: false, descripcion: x.descripcion, proveedor: x.proveedor, factura_numero: x.numero, persona_id: null,
-          persona: '', moneda: 'ARS', monto: x.importe_ars, iva_pct: x.iva_pct, tipo_cambio: null, pagado_el: x.pagado_el,
-        });
+          persona: '', moneda: 'ARS', monto: x.importe_ars, iva_pct: x.iva_pct, tipo_cambio: null,
+          vence: sumarDias(x.fecha, diasPago),
+        }, x.pagado_el);
         gastos = [...gastos, ...comprasXubio.filter((x) => x.area === 'operacion').map(deXubio)];
         gastosAdmin = [...gastosAdmin, ...comprasXubio.filter((x) => x.area === 'administracion' || x.area === 'vehiculo').map(deXubio)];
         const esperado = escenarios.esperado && completarEscenario(escenarios.esperado.supuestos);
@@ -2060,7 +2063,7 @@ function GastosMes({ mes, datos, onCambio }) {
   async function actualizar(g, cambios) {
     try {
       const f = g.origen === 'xubio'
-        ? (await db.actualizarCompraXubio(g.xubioId, cambios), { ...g, ...cambios })
+        ? (await db.actualizarCompraXubio(g.xubioId, cambios), pagoXubio(g, cambios.pagado_el))
         : await db.guardarGasto({ ...g, ...cambios });
       setGastos((gs) => gs.map((x) => (x.id === g.id ? { ...x, ...f, monto: Number(f.monto), iva_pct: Number(f.iva_pct) } : x)));
       onCambio();
@@ -2207,9 +2210,12 @@ function GastosMes({ mes, datos, onCambio }) {
                 <td>{g.proveedor}{g.factura_numero && <span className="ayuda"> · {g.factura_numero}</span>}</td>
                 <td className="n mono">{g.moneda === 'USD' ? `USD ${dec(g.monto, 2)}` : pesos(g.monto)}{g.moneda === 'USD' && <div className="ayuda">TC {dec(g.tipo_cambio, 2)}</div>}</td>
                 <td className="n mono fuerte">{pesos(montoArs(g))}</td>
-                <td><input type="date" value={g.pagado_el ?? ''} onChange={(e) => actualizar(g, { pagado_el: e.target.value || null })} /></td>
+                <td>
+                  <input type="date" value={(g.origen === 'xubio' ? g.pagoManual : g.pagado_el) ?? ''} onChange={(e) => actualizar(g, { pagado_el: e.target.value || null })} />
+                  {g.origen === 'xubio' && !g.pagoManual && <div className="ayuda">{g.pagado_el ? 'Pagada' : 'Vence'} el {fecha(g.vence)} (automático)</div>}
+                </td>
                 <td className="ayuda">{g.reembolsable ? (g.facturado_en ? `En ${g.facturado_en}` : 'Pendiente') : '—'}</td>
-                <td><button type="button" className="terciario chico" onClick={() => borrar(g)}>Borrar</button></td>
+                <td>{g.origen !== 'xubio' && <button type="button" className="terciario chico" onClick={() => borrar(g)}>Borrar</button>}</td>
               </tr>
             ))}
           </tbody>
@@ -2601,7 +2607,7 @@ function GastosFijosMes({ area, mes, anterior, datos, onCambio }) {
   async function actualizar(g, cambios) {
     try {
       const f = g.origen === 'xubio'
-        ? (await db.actualizarCompraXubio(g.xubioId, cambios), { ...g, ...cambios })
+        ? (await db.actualizarCompraXubio(g.xubioId, cambios), pagoXubio(g, cambios.pagado_el))
         : await db.guardarGastoAdmin({ ...g, ...cambios });
       setGastos((gs) => gs.map((x) => (x.id === g.id ? numeros({ ...x, ...f }) : x)));
       onCambio();
@@ -2708,8 +2714,11 @@ function GastosFijosMes({ area, mes, anterior, datos, onCambio }) {
                 <td>{g.proveedor}{g.factura_numero && <span className="ayuda"> · {g.factura_numero}</span>}</td>
                 <td className="n mono">{g.moneda === 'USD' ? `USD ${dec(g.monto, 2)}` : pesos(g.monto)}{g.moneda === 'USD' && <div className="ayuda">TC {dec(g.tipo_cambio, 2)}</div>}</td>
                 <td className="n mono fuerte">{pesos(montoArs(g))}</td>
-                <td><input type="date" value={g.pagado_el ?? ''} onChange={(e) => actualizar(g, { pagado_el: e.target.value || null })} /></td>
-                <td><button type="button" className="terciario chico" onClick={() => borrar(g)}>Borrar</button></td>
+                <td>
+                  <input type="date" value={(g.origen === 'xubio' ? g.pagoManual : g.pagado_el) ?? ''} onChange={(e) => actualizar(g, { pagado_el: e.target.value || null })} />
+                  {g.origen === 'xubio' && !g.pagoManual && <div className="ayuda">{g.pagado_el ? 'Pagada' : 'Vence'} el {fecha(g.vence)} (automático)</div>}
+                </td>
+                <td>{g.origen !== 'xubio' && <button type="button" className="terciario chico" onClick={() => borrar(g)}>Borrar</button>}</td>
               </tr>
             ))}
           </tbody>
@@ -2964,6 +2973,11 @@ function Xubio() {
   );
 }
 
+// Fecha de pago de una compra de Xubio: la cargada a mano o, si no hay, el vencimiento cuando ya pasó.
+function pagoXubio(g, manual) {
+  return { ...g, pagoManual: manual || null, pagado_el: manual || (g.vence <= hoyIso() ? g.vence : null) };
+}
+
 // Destinos de una compra de Xubio: el módulo de la app y sus rubros.
 const DESTINOS_XUBIO = {
   operacion: { nombre: 'Operación', rubros: RUBROS },
@@ -3070,7 +3084,7 @@ function ComprasXubio() {
               ? ` · ${sync.facturas} facturas desde ${fecha(sync.desde)}, ${sync.renglones} renglones de ${sync.centroDeCosto}${sync.porClasificar ? ` · ${sync.porClasificar} por clasificar` : ''}.`
               : <span className="error"> · Error: {sync.error}</span>}</>
             : 'Todavía no se actualizó.'}
-          {' '}Se actualiza solo todos los días a las 8:00. Los montos son sin IVA; la fecha de pago se carga en cada módulo.
+          {' '}Se actualiza solo todos los días a las 8:00. Los montos son sin IVA. Cada factura se da por pagada a los 30 días, salvo que cargues otra fecha en su módulo.
         </p>
         {error && <p className="aviso error">Error: {error}</p>}
       </section>
