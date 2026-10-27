@@ -208,3 +208,29 @@ export async function marcarProformaEnviada(id, fecha) {
 export async function anularProforma(id, motivo) {
   ok(await supabase.from('proformas').update({ estado: 'anulada', motivo_anulacion: motivo }).eq('id', id).select('id').single());
 }
+
+// ─── Resultado proyectado: supuestos por escenario ───────────────────────────
+
+export async function leerEscenarios() {
+  return Object.fromEntries(ok(await supabase.from('escenarios').select('clave, supuestos, original, updated_at, updated_by'))
+    .map((f) => [f.clave, {
+      supuestos: f.supuestos,
+      original: f.original,
+      editado: JSON.stringify(f.supuestos) !== JSON.stringify(f.original),
+      actualizado: { at: f.updated_at, por: f.updated_by },
+    }]));
+}
+
+export async function guardarEscenario(clave, supuestos) {
+  const f = ok(await supabase.from('escenarios').update({ supuestos }).eq('clave', clave).select('updated_at, updated_by').single());
+  return { at: f.updated_at, por: f.updated_by };
+}
+
+// Vuelve los supuestos a los valores originales del Excel (columna `original`).
+export async function restaurarEscenario(clave, original) {
+  return guardarEscenario(clave, original);
+}
+
+export async function leerReferencia(clave) {
+  return ok(await supabase.from('referencias').select('valor').eq('clave', clave).maybeSingle())?.valor ?? null;
+}

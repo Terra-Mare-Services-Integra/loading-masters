@@ -126,6 +126,20 @@ pago. Página 2: detalle día por día del factor de cada ítem.
 El diseño sigue el TERRAMARE Design System (Jost / Montserrat / IBM Plex Mono, azul `#235C96`,
 filete bajo títulos, radio 0, márgenes A4 20/18/16 mm) y el PDF sale con texto nativo, no imagen.
 
+## Inicio y resultado proyectado
+
+La app abre en un **inicio con cajitas** por módulo: Facturación, Fórmula de ajuste y Resultado
+(activos), y Sueldos, Sergio, Operación, Vehículo, Vivienda, Administración y Seguros (a armar).
+
+**Resultado proyectado** (`src/lib/resultado.js`) aplica las fórmulas de la hoja "Generacion" de los
+Excel internos de arranque (75 %) y esperado (100 %): ingresos, capitanes, operación, pólizas,
+estructura, Sergio (fijo + participación sobre el resultado bruto), imprevistos e impuestos.
+
+**Los valores de esos Excel no están en este repositorio, que es público**: viven solo en la base
+(tabla `escenarios`, con `original` para "Volver al Excel", y `referencias` para el paso
+mar-26 → oct-26). Los tests públicos usan números inventados; la verificación al centavo contra
+los Excel está en `test/local/` (ignorada por git): `npm run test:excel`.
+
 ## Etapas
 
 | # | Etapa | Estado |

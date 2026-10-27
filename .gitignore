@@ -7,3 +7,6 @@ salidas/
 
 .vercel
 .env*
+
+# Verificación contra los Excel internos del usuario (valores privados)
+test/local/

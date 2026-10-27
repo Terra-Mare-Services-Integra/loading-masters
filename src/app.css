@@ -196,3 +196,30 @@ label.check input{ min-height:0; width:16px; height:16px; }
 /* Valores con origen al pasar el mouse */
 .con-origen{ text-decoration:underline dotted var(--tm-blue-light); text-underline-offset:3px; cursor:help; }
 td.con-origen input{ cursor:text; }
+
+/* Inicio en cajitas */
+.cajitas{ display:grid; grid-template-columns:repeat(auto-fill, minmax(240px, 1fr)); gap:16px; margin-top:32px; }
+.cajita{ display:flex; flex-direction:column; align-items:flex-start; gap:6px; text-align:left; min-height:140px;
+  background:var(--tm-white); color:var(--tm-ink); border:1px solid var(--border-subtle); border-top:4px solid var(--tm-blue);
+  padding:20px; font-weight:400; }
+.cajita:hover{ background:var(--tm-blue-050); border-color:var(--tm-blue-light); border-top-color:var(--tm-blue-700); }
+.cajita-nombre{ font-family:var(--font-display); font-size:22px; line-height:1.15; }
+.cajita-desc{ font-size:13px; color:var(--text-muted); }
+.cajita-dato{ margin-top:auto; font-size:12px; font-weight:600; color:var(--tm-blue); }
+.cajita.apagada{ background:var(--tm-surface); border-top-color:var(--tm-blue-light); cursor:default; }
+.cajita.apagada .cajita-nombre{ color:var(--text-muted); }
+.cajita.apagada .cajita-dato{ color:var(--tm-blue-light); }
+
+/* Resultado proyectado */
+.tabla-resultado, .tabla-supuestos{ width:100%; border-collapse:collapse; font-size:14px; }
+.tabla-resultado th, .tabla-supuestos th{ text-align:left; font-size:12px; font-weight:600; padding:8px 12px; border-bottom:1px solid var(--tm-blue-light); }
+.tabla-resultado td, .tabla-supuestos td{ padding:6px 12px; border-bottom:1px solid var(--border-subtle); }
+.tabla-resultado .n, .tabla-supuestos .n{ text-align:right; }
+.tabla-resultado tr.ingreso td{ font-weight:600; }
+.tabla-resultado tr.subtotal td{ font-weight:600; border-top:1px solid var(--tm-blue-light); background:var(--tm-surface); }
+.tabla-resultado tr.total td{ font-weight:600; background:var(--tm-blue-deep); color:var(--tm-white); }
+.tabla-resultado tr.margen td{ color:var(--text-muted); font-size:13px; }
+.tabla-supuestos input{ width:150px; text-align:right; min-height:30px; padding:4px 6px; }
+.tabla-supuestos td:last-child, .tabla-supuestos td:nth-child(2){ white-space:nowrap; }
+.supuestos{ margin-top:40px; }
+.aviso.alerta{ color:#C97A16; border-left:4px solid #C97A16; padding-left:12px; }

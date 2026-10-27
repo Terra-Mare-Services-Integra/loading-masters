@@ -8,6 +8,7 @@ import { supabase, DOMINIOS } from './lib/supabase.js';
 import { armarProforma, comprimirTramos, expandirTramos } from './proforma/armar.js';
 import { renderProforma } from './proforma/plantilla.js';
 import * as db from './datos.js';
+import { calcularResultado, completarEscenario, CLAVES_ESCENARIOS } from './lib/resultado.js';
 
 const MENSUALES = CONTRATO_VMOS.items.filter((i) => i.tipo === 'mensual');
 const DOW = ['D', 'L', 'M', 'M', 'J', 'V', 'S'];
@@ -148,15 +149,18 @@ function Ingreso() {
 }
 
 function Certificacion() {
-  const [vista, setVista] = useState('facturaciones');
+  const [vista, setVista] = useState('inicio');
   return (
     <>
       <nav className="vistas">
-        {[['facturaciones', 'Facturaciones'], ['formula', 'Fórmula de ajuste']].map(([id, n]) => (
+        {[['inicio', 'Inicio'], ['facturaciones', 'Facturación'], ['formula', 'Fórmula de ajuste'], ['resultado', 'Resultado']].map(([id, n]) => (
           <button key={id} type="button" className={`vista ${vista === id ? 'activa' : ''}`} onClick={() => setVista(id)}>{n}</button>
         ))}
       </nav>
-      {vista === 'formula' ? <main><SeguimientoFormula /></main> : <Facturaciones />}
+      {vista === 'inicio' && <Inicio onAbrir={setVista} />}
+      {vista === 'facturaciones' && <Facturaciones />}
+      {vista === 'formula' && <main><SeguimientoFormula /></main>}
+      {vista === 'resultado' && <Resultado />}
     </>
   );
 }
@@ -1055,12 +1059,13 @@ function SeguimientoFormula() {
 
   async function cargar() {
     try {
-      const [indices, series, ajustes] = await Promise.all([
+      const [indices, series, ajustes, historia] = await Promise.all([
         db.leerIndices(meses),
         db.leerSeriesRango(meses, meses.map((m) => mesMenos(m, 2))),
         db.leerAjustes(),
+        db.leerReferencia('historia_ajuste').catch(() => null),
       ]);
-      setDatos({ indices, series, ajustes });
+      setDatos({ indices, series, ajustes, historia });
     } catch (e) {
       setError(e.message);
     }
@@ -1070,8 +1075,8 @@ function SeguimientoFormula() {
   if (!datos) return <section className="seguimiento">{error ? <p className="aviso error">Error: {error}</p> : 'Cargando…'}</section>;
 
   const aprobados = datos.ajustes.filter((a) => a.estado === 'aprobado');
-  const h = CONTRATO_VMOS.ajuste.historia;
-  const factorHistorico = factorAjuste(CONTRATO_VMOS.ajuste.base, h.indices);
+  const h = datos.historia;
+  const factorHistorico = h && factorAjuste(CONTRATO_VMOS.ajuste.base, h.indices);
 
   function setMo(mes, valor) {
     const actual = datos.indices[mes] ?? { mo: null, ipc: null, usd: null, paritaria: false };
@@ -1106,13 +1111,13 @@ function SeguimientoFormula() {
             </tr>
           </thead>
           <tbody>
-            <tr className="historia">
+            {h && <tr className="historia">
               <td>{nombreMes(h.mes)} <span className="ayuda">precios originales</span></td>
               <td className="n mono con-origen" title="Básico Capitán de Ultramar de marzo 2026 (Excel Formula de ajuste)">{dec(h.indices.mo, 0)}</td>
               <td className="n mono con-origen" title="IPC Nivel General Nacional de enero 2026, INDEC (n-2 de marzo)">{dec(h.indices.ipc, 1)}</td>
               <td className="n mono con-origen" title="Dólar BNA divisa vendedor del 02/03/2026, primer día hábil de marzo">{dec(h.indices.usd, 1)}</td>
               <td colSpan={8} className="ayuda">Paso a oct-26: índice {dec(factorHistorico * 100, 1)} % → precios de la oferta</td>
-            </tr>
+            </tr>}
             {meses.map((mes) => {
               const guardado = datos.indices[mes] ?? {};
               const ipc = datos.series.ipc[mesMenos(mes, 2)];
@@ -1170,3 +1175,259 @@ function SeguimientoFormula() {
 }
 
 const MOTIVOS = { ipc: 'IPC > 15 %', usd: 'dólar > 15 %', paritaria: 'acuerdo gremial', plazo: '6 meses' };
+
+// ─── Inicio en cajitas ───────────────────────────────────────────────────────
+
+const MODULOS = [
+  { id: 'facturaciones', nombre: 'Facturación', desc: 'Certificaciones, proformas y envíos a VMOS', icono: 'FAC' },
+  { id: 'formula', nombre: 'Fórmula de ajuste', desc: 'Índices, base y disparadores del Anexo II', icono: 'AJU' },
+  { id: 'resultado', nombre: 'Resultado', desc: 'Proyección mensual: arranque 75 % y esperado 100 %', icono: 'RES' },
+  { id: 'sueldos', nombre: 'Sueldos', desc: 'Capitanes Sr y Jr: sueldo, cargas, OSDE, bono' },
+  { id: 'sergio', nombre: 'Sergio', desc: 'Superintendente técnico: fijo y participación' },
+  { id: 'operacion', nombre: 'Operación', desc: 'Vuelos, remises, hoteles, viáticos, EPP' },
+  { id: 'vehiculo', nombre: 'Vehículo', desc: 'Camioneta, pólizas, services' },
+  { id: 'vivienda', nombre: 'Vivienda', desc: 'Alquiler del departamento' },
+  { id: 'administracion', nombre: 'Administración', desc: 'Estructura TM: Xubio, Office, celulares' },
+  { id: 'seguros', nombre: 'Seguros', desc: 'RC del contrato y pólizas 1a–1c' },
+];
+const ACTIVOS = ['facturaciones', 'formula', 'resultado'];
+
+function Inicio({ onAbrir }) {
+  const [datos, setDatos] = useState(null);
+  useEffect(() => {
+    Promise.all([db.listarFacturaciones(), db.leerEscenarios()])
+      .then(([facturaciones, escenarios]) => setDatos({ facturaciones, escenarios }))
+      .catch(() => setDatos({ facturaciones: [], escenarios: {} }));
+  }, []);
+
+  const ultima = datos?.facturaciones[0];
+  const esperado = datos?.escenarios.esperado && calcularResultado(completarEscenario(datos.escenarios.esperado.supuestos));
+  const detalle = {
+    facturaciones: ultima ? `${ultima.nombre} · ${fecha(ultima.desde)} – ${fecha(ultima.hasta)}` : 'Sin facturaciones',
+    formula: 'Base: contrato, octubre 2026',
+    resultado: esperado ? `Esperado: USD ${dec(esperado.total.generacion, 0)}/mes para TM` : '',
+  };
+
+  return (
+    <main>
+      <section className="encabezado">
+        <div>
+          <div className="overline">VMOS · Terminal Punta Colorada</div>
+          <h1>Loading Masters.</h1>
+          <div className="filete" />
+        </div>
+      </section>
+      <div className="cajitas">
+        {MODULOS.map((m) => {
+          const activo = ACTIVOS.includes(m.id);
+          return activo ? (
+            <button key={m.id} type="button" className="cajita" onClick={() => onAbrir(m.id)}>
+              <span className="cajita-nombre">{m.nombre}</span>
+              <span className="cajita-desc">{m.desc}</span>
+              {detalle[m.id] && <span className="cajita-dato">{detalle[m.id]}</span>}
+            </button>
+          ) : (
+            <div key={m.id} className="cajita apagada">
+              <span className="cajita-nombre">{m.nombre}</span>
+              <span className="cajita-desc">{m.desc}</span>
+              <span className="cajita-dato">A armar</span>
+            </div>
+          );
+        })}
+      </div>
+    </main>
+  );
+}
+
+// ─── Resultado proyectado ────────────────────────────────────────────────────
+// Mismo cuadro que los Excel "Arranque contrato" y "Resultado esperado". Los supuestos se editan acá
+// y se guardan por escenario; "Volver al Excel" restaura los valores originales.
+
+const usd = (x) => `${x < 0 ? '−' : ''}${dec(Math.abs(x), 0)}`;
+const FILAS_RESULTADO = [
+  ['Ingreso CO&C', (r) => r.coc.ingreso, 'ingreso'],
+  ['Ingreso seguros (1a–1c)', (r) => r.seguros.ingreso, 'ingreso'],
+  ['Capitanes Senior', (r) => -r.coc.sueldosSr],
+  ['Capitanes Junior', (r) => -r.coc.sueldosJr],
+  ['Operación (rotación y fijos)', (r) => -r.coc.operacion],
+  ['Pólizas de seguros', (r) => -r.seguros.costoSeguros],
+  ['Estructura TM', (r) => -r.coc.estructuraTm],
+  ['Sergio · fijo', (r) => -r.coc.sgFijo],
+  ['Imprevistos', (r) => -(r.coc.imprevistos + r.seguros.imprevistos)],
+  ['Impuesto al crédito y débito', (r) => -(r.coc.credito + r.seguros.credito)],
+  ['Ingresos brutos', (r) => -(r.coc.iibb + r.seguros.iibb)],
+  ['Resultado bruto', (r) => r.total.bruto, 'subtotal'],
+  ['Sergio · participación', (r) => -r.total.participacionSg],
+  ['Generación TM', (r) => r.total.generacion, 'total'],
+];
+
+const CAMPOS_SUPUESTOS = [
+  ['factorPrecio', 'Factor de precio (cl. 4.2)', 'número'],
+  ['ingresoCocUsd', 'Ingreso CO&C al 100 % (USD/mes)'],
+  ['ingresoSegurosUsd', 'Ingreso seguros (USD/mes)'],
+  ['capitanesSr.cantidad', 'Capitanes Senior (cantidad)', 'número'],
+  ['capitanesSr.costoUsd', 'Costo por Senior (USD/mes)'],
+  ['capitanesJr.cantidad', 'Capitanes Junior (cantidad)', 'número'],
+  ['capitanesJr.costoUsd', 'Costo por Junior (USD/mes)'],
+  ['operacionUsd', 'Operación: rotación y fijos (USD/mes)'],
+  ['costoSegurosUsd', 'Pólizas de seguros (USD/mes)'],
+  ['estructuraTmUsd', 'Estructura TM que se resta (USD/mes)'],
+  ['estructuraBaseSgUsd', 'Estructura base para Sergio (USD/mes, al 100 %)'],
+  ['sgFijoUsd', 'Sergio fijo (USD/mes, al 100 %)'],
+  ['pctImprevistos', 'Imprevistos (%)', '%'],
+  ['pctCredito', 'Impuesto al crédito y débito (%)', '%'],
+  ['pctIibb', 'Ingresos brutos (%)', '%'],
+  ['pctParticipacionSg', 'Participación de Sergio (%)', '%'],
+  ['mesesContrato', 'Meses de contrato', 'número'],
+  ['fx', 'Tipo de cambio (ARS/USD)', 'número'],
+];
+const leerCampo = (o, ruta) => ruta.split('.').reduce((x, k) => x?.[k], o);
+const conCampo = (o, ruta, v) => {
+  const [k, ...resto] = ruta.split('.');
+  return { ...o, [k]: resto.length ? conCampo(o[k], resto.join('.'), v) : v };
+};
+
+function Resultado() {
+  const [escenarios, setEscenarios] = useState(null);
+  const [error, setError] = useState('');
+  const pendientes = useRef({});
+
+  useEffect(() => {
+    db.leerEscenarios()
+      .then((guardados) => setEscenarios(Object.fromEntries(CLAVES_ESCENARIOS.filter((c) => guardados[c]).map((c) => [c, {
+        ...guardados[c],
+        supuestos: completarEscenario(guardados[c].supuestos),
+      }]))))
+      .catch((e) => setError(e.message));
+  }, []);
+
+  if (!escenarios) return <main>{error ? <p className="aviso error">Error: {error}</p> : 'Cargando…'}</main>;
+
+  const claves = CLAVES_ESCENARIOS.filter((c) => escenarios[c]);
+  if (!claves.length) return <main><p className="aviso">Todavía no hay escenarios cargados en la base de datos.</p></main>;
+  const resultados = Object.fromEntries(claves.map((c) => [c, calcularResultado(escenarios[c].supuestos)]));
+
+  function cambiar(clave, ruta, valor) {
+    const supuestos = conCampo(escenarios[clave].supuestos, ruta, valor);
+    setEscenarios((e) => ({ ...e, [clave]: { ...e[clave], supuestos, editado: true } }));
+    clearTimeout(pendientes.current[clave]);
+    pendientes.current[clave] = setTimeout(() => {
+      db.guardarEscenario(clave, supuestos)
+        .then((actualizado) => setEscenarios((e) => ({ ...e, [clave]: { ...e[clave], actualizado } })))
+        .catch((err) => setError(err.message));
+    }, 800);
+  }
+
+  async function volverAlExcel(clave) {
+    const { original } = escenarios[clave];
+    if (!confirm(`¿Volver los supuestos de "${original.nombre}" a los valores del Excel?`)) return;
+    try {
+      clearTimeout(pendientes.current[clave]);
+      const actualizado = await db.restaurarEscenario(clave, original);
+      setEscenarios((e) => ({ ...e, [clave]: { ...e[clave], supuestos: completarEscenario(original), editado: false, actualizado } }));
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  return (
+    <main>
+      <section className="encabezado">
+        <div>
+          <h1>Resultado proyectado.</h1>
+          <div className="filete" />
+          <p className="aviso">USD por mes, con las fórmulas de tus Excel "Arranque contrato" y "Resultado esperado".</p>
+        </div>
+      </section>
+
+      <div className="tabla-scroll">
+        <table className="tabla-resultado">
+          <thead>
+            <tr><th>Concepto</th>{claves.map((c) => <th key={c} className="n">{escenarios[c].supuestos.nombre}</th>)}</tr>
+          </thead>
+          <tbody>
+            {FILAS_RESULTADO.map(([nombre, fn, tipo]) => (
+              <tr key={nombre} className={tipo ?? ''}>
+                <td>{nombre}</td>
+                {claves.map((c) => <td key={c} className="n mono">{usd(fn(resultados[c]))}</td>)}
+              </tr>
+            ))}
+            <tr className="margen">
+              <td>Margen sobre ingresos</td>
+              {claves.map((c) => <td key={c} className="n mono">{dec(resultados[c].total.margen * 100, 1)} %</td>)}
+            </tr>
+            <tr className="margen">
+              <td>Generación TM en pesos</td>
+              {claves.map((c) => <td key={c} className="n mono">$ {dec(resultados[c].total.generacion * escenarios[c].supuestos.fx, 0)}</td>)}
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div className="columnas">
+        {claves.map((c) => {
+          const r = resultados[c];
+          const s = escenarios[c].supuestos;
+          return (
+            <section key={c} className="tarjeta">
+              <div className="overline">{s.nombre} · {s.mesesContrato} meses</div>
+              <div className="calendario">
+                <div><span className="mono">USD {dec(r.contrato.generacionCoc + r.contrato.generacionSeguros, 0)}</span> generación TM del contrato</div>
+                <div><span className="mono">USD {dec(r.sergio.mensual, 0)}</span> Sergio por mes (fijo + participación)</div>
+                <div><span className="mono">USD {dec(r.contrato.sergio, 0)}</span> Sergio en el contrato</div>
+                <div><span className="mono">USD {dec(r.total.participacionSg, 0)}</span> participación por mes</div>
+              </div>
+            </section>
+          );
+        })}
+      </div>
+
+      <section className="supuestos">
+        <div className="overline">Supuestos</div>
+        <p className="aviso">Se guardan solos. Sergio cobra el fijo y la estructura base escalados por el factor de precio, y su participación es el % del resultado bruto CO&C menos el % de la estructura base.</p>
+        <div className="tabla-scroll">
+          <table className="tabla-supuestos">
+            <thead><tr><th>Supuesto</th>{claves.map((c) => <th key={c} className="n">{escenarios[c].supuestos.nombre}</th>)}</tr></thead>
+            <tbody>
+              {CAMPOS_SUPUESTOS.map(([ruta, nombre, tipo]) => (
+                <tr key={ruta}>
+                  <td>{nombre}</td>
+                  {claves.map((c) => {
+                    const v = leerCampo(escenarios[c].supuestos, ruta);
+                    const mostrado = tipo === '%' ? Math.round(v * 10000) / 100 : tipo === 'número' ? v : Math.round(v * 100) / 100;
+                    return (
+                      <td key={c} className="n">
+                        <input type="number" step="any" className="mono" value={mostrado}
+                          onChange={(e) => {
+                            const n = Number(e.target.value);
+                            if (e.target.value === '' || Number.isNaN(n)) return;
+                            cambiar(c, ruta, tipo === '%' ? n / 100 : n);
+                          }} />
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+              <tr>
+                <td />
+                {claves.map((c) => (
+                  <td key={c} className="n">
+                    <span className="ayuda">{escenarios[c].editado ? `Editado ${hora.format(new Date(escenarios[c].actualizado.at))}` : 'Valores del Excel'}</span>
+                    {escenarios[c].editado && <button type="button" className="terciario chico" onClick={() => volverAlExcel(c)}>Volver al Excel</button>}
+                  </td>
+                ))}
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        {escenarios.arranque && escenarios.esperado && escenarios.arranque.supuestos.operacionUsd === 0 && (
+          <p className="aviso alerta">
+            En el Excel de arranque "Costos Rotación" está vacío. En el esperado son USD {dec(escenarios.esperado.supuestos.operacionUsd, 0)}/mes
+            (rotación, fijos por empleado y remise). Si en el arranque también hay vuelos, remises y viáticos, cargalos en "Operación".
+          </p>
+        )}
+      </section>
+      {error && <p className="aviso error">Error: {error}</p>}
+    </main>
+  );
+}

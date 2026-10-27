@@ -8,7 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "node --test \"test/*.test.js\"",
-    "proforma": "node scripts/proforma.js"
+    "proforma": "node scripts/proforma.js",
+    "test:excel": "node --test \"test/local/*.test.js\""
   },
   "devDependencies": {
     "@supabase/supabase-js": "^2.118.0",

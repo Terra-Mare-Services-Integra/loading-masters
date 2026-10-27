@@ -36,13 +36,7 @@ export const CONTRATO_VMOS = {
       ipc: 'IPC Nivel General Nacional de agosto 2026, INDEC (IPC0 del contrato: n-2 de octubre)',
       usd: 'Dólar BNA divisa vendedor del 01/10/2026 (USD0 del contrato)',
     },
-    // Paso anterior, de referencia (Excel "Formula de ajuste"): los precios de la oferta (base oct-26)
-    // salen de ajustar los de marzo 2026 con la misma fórmula.
-    historia: {
-      mes: '2026-03',
-      indices: { mo: 0, ipc: 0, usd: 0 }, // valores en la base de datos
-      precios: { 1: 0, '1a': 0, '1b': 0, '1c': 0 }, // valores en la base de datos
-    },
+    // El paso de referencia mar-26 → oct-26 (Excel "Formula de ajuste") está en la base: referencias.historia_ajuste.
     disparadores: { ipcAcumulado: 0.15, usdAcumulado: 0.15, meses: 6 },
     // La revisión se pide entre el día 1 y el 10; rige desde el 1 del mes siguiente.
     ventanaPedido: { desde: 1, hasta: 10 },
