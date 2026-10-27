@@ -129,7 +129,7 @@ filete bajo títulos, radio 0, márgenes A4 20/18/16 mm) y el PDF sale con texto
 ## Inicio y resultado proyectado
 
 La app abre en un **inicio con cajitas** por módulo: Facturación, Fórmula de ajuste y Resultado
-(activos), y Sueldos, Sergio, Operación, Vehículo, Vivienda, Administración y Seguros (a armar).
+(activos), y Sueldos, Sergio, Operación (incluye el alquiler de la vivienda), Vehículo, Administración y Seguros (a armar).
 
 **Resultado proyectado** (`src/lib/resultado.js`) aplica las fórmulas de la hoja "Generacion" de los
 Excel internos de arranque (75 %) y esperado (100 %): ingresos, capitanes, operación, pólizas,

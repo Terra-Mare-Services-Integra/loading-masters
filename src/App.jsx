@@ -1263,9 +1263,8 @@ const MODULOS = [
   { id: 'resultado', nombre: 'Resultado', desc: 'P&L mes a mes: real y proyectado' },
   { id: 'sueldos', nombre: 'Sueldos', desc: 'Capitanes en relación de dependencia, mes a mes' },
   { id: 'desempeno', nombre: 'Desempeño', desc: 'Evaluación semestral 360° y bono de los capitanes' },
-  { id: 'operacion', nombre: 'Operación', desc: 'Compras y reembolsables: transporte, combustible, hospedaje, EPP, Sergio' },
+  { id: 'operacion', nombre: 'Operación', desc: 'Compras y reembolsables: transporte, combustible, vivienda, EPP, Sergio' },
   { id: 'vehiculo', nombre: 'Vehículo', desc: 'Camioneta, pólizas, services' },
-  { id: 'vivienda', nombre: 'Vivienda', desc: 'Alquiler del departamento' },
   { id: 'administracion', nombre: 'Administración', desc: 'Estructura TM: Xubio, Office, celulares' },
   { id: 'seguros', nombre: 'Seguros', desc: 'RC del contrato y pólizas 1a–1c' },
 ];

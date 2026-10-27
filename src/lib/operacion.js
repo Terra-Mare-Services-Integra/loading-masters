@@ -6,6 +6,7 @@ export const RUBROS = [
   { id: 'transporte_terrestre', nombre: 'Transporte terrestre' },
   { id: 'combustible', nombre: 'Combustible' },
   { id: 'hospedaje', nombre: 'Hospedaje' },
+  { id: 'vivienda', nombre: 'Vivienda (alquiler y expensas)' },
   { id: 'comida', nombre: 'Comida y viáticos' },
   { id: 'ropa', nombre: 'Ropa de trabajo y EPP' },
   { id: 'equipamiento', nombre: 'Equipamiento técnico' },
