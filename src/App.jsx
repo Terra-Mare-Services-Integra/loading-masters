@@ -1337,10 +1337,15 @@ function Resultado() {
   const { datos, error } = useContrato();
   const [filtro, setFiltro] = useState('todo');
   const [moneda, setMoneda] = useState('ars');
+  const [anio, setAnio] = useState('total');
 
   if (!datos) return <main>{error ? <p className="aviso error">Error: {error}</p> : 'Cargando…'}</main>;
 
-  const filas = filtro === 'actuales' ? datos.filas.filter((f) => f.real) : datos.filas;
+  // Cada período va al año de su mes (noviembre 2026 incluye los días de octubre).
+  const anios = [...new Set(datos.filas.map((f) => f.mes.slice(0, 4)))];
+  const filas = datos.filas
+    .filter((f) => filtro !== 'actuales' || f.real)
+    .filter((f) => anio === 'total' || f.mes.startsWith(anio));
   const conv = (f, k) => (moneda === 'usd' ? f[k] / f.fx : f[k]);
   const total = (k) => filas.reduce((s, f) => s + conv(f, k), 0);
   const formato = (x) => {
@@ -1366,6 +1371,10 @@ function Resultado() {
           <div className="segmentado">
             <button type="button" className={filtro === 'actuales' ? 'activo' : ''} onClick={() => setFiltro('actuales')}>Actuales</button>
             <button type="button" className={filtro === 'todo' ? 'activo' : ''} onClick={() => setFiltro('todo')}>Actuales + proyectados</button>
+          </div>
+          <div className="segmentado">
+            {anios.map((a) => <button key={a} type="button" className={anio === a ? 'activo' : ''} onClick={() => setAnio(a)}>{a}</button>)}
+            <button type="button" className={anio === 'total' ? 'activo' : ''} onClick={() => setAnio('total')}>Total</button>
           </div>
           <div className="segmentado">
             <button type="button" className={moneda === 'ars' ? 'activo' : ''} onClick={() => setMoneda('ars')}>ARS</button>
@@ -1395,7 +1404,7 @@ function Resultado() {
           {filas.length > 0 && (
             <tfoot>
               <tr>
-                <td>Total {filtro === 'actuales' ? 'facturado' : `${filas.length} meses`}</td>
+                <td>Total{anio !== 'total' && ` ${anio}`} {filtro === 'actuales' ? 'facturado' : `(${filas.length} meses)`}</td>
                 {COLUMNAS_PNL.map(([k]) => (
                   <td key={k} className="n mono">{formato(['ingreso', 'bruto', 'generacion'].includes(k) ? total(k) : -total(k))}</td>
                 ))}
