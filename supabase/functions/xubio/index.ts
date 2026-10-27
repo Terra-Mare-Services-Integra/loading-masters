@@ -48,6 +48,10 @@ const fechaIso = (d: Date) => d.toISOString().slice(0, 10);
 function resumirComprobante(c: any) {
   return {
     id: c.transaccionid ?? c.transaccionId ?? null,
+    cliente: nombre(c.cliente),
+    puntoVenta: nombre(c.puntoVenta),
+    estado: nombre(c.estado) ?? c.estado ?? null,
+    fechaVto: c.fechaVto ?? null,
     numero: c.numeroDocumento ?? null,
     tipo: c.tipo ?? null,
     fecha: c.fecha ?? c.fechaComprobante ?? null,
@@ -64,6 +68,7 @@ function resumirComprobante(c: any) {
       centroDeCosto: nombre(i.centroDeCosto),
       cantidad: i.cantidad ?? null,
       precio: i.precio ?? null,
+      precioConIva: i.precioconivaincluido ?? null,
       importe: i.importe ?? null,
       iva: i.iva ?? null,
     })),
@@ -117,6 +122,24 @@ async function diagnostico(desde: string, hasta: string) {
       return id ? xubio(tk, `/comprobanteCompraBean/${id}`).catch(() => f) : f;
     }));
     return { cantidad: todas.length, muestra: detalle.map(resumirComprobante) };
+  });
+
+  // Ventas: lo necesario para crear el presupuesto de la proforma desde la app.
+  resultado.clientes = await paso(async () => {
+    const todos = lista(await xubio(tk, '/clienteBean'));
+    const vmos = todos.filter((c: any) => /vmos/i.test(`${c.nombre ?? ''} ${c.razonSocial ?? ''}`));
+    return { cantidad: todos.length, lista: vmos.map((c: any) => `${c.nombre ?? c.razonSocial} (id ${c.cliente_id ?? c.clienteid ?? c.id ?? '?'}, CUIT ${c.cuit ?? '—'})`), campos: Object.keys(todos[0] ?? {}) };
+  });
+  resultado.productosDeVenta = await paso(async () => ({ lista: lista(await xubio(tk, '/ProductoVentaBean')).map((p: any) => `${nombre(p)}${p.codigo ? ` [${p.codigo}]` : ''}`) }));
+  resultado.puntosDeVenta = await paso(async () => ({ lista: lista(await xubio(tk, '/puntoVentaBean')).map((p: any) => `${nombre(p)}${p.puntoVenta ? ` (${p.puntoVenta})` : ''}`) }));
+  resultado.presupuestos = await paso(async () => {
+    const todos = lista(await xubio(tk, '/presupuestoBean'));
+    const ultimos = [...todos].sort((a: any, b: any) => String(b.fecha).localeCompare(String(a.fecha))).slice(0, 3);
+    const detalle = await Promise.all(ultimos.map((o: any) => {
+      const id = o.transaccionid ?? o.transaccionId;
+      return id ? xubio(tk, `/presupuestoBean/${id}`).catch(() => o) : o;
+    }));
+    return { cantidad: todos.length, muestra: detalle.map(resumirComprobante) };
   });
 
   resultado.pagos = await paso(async () => {

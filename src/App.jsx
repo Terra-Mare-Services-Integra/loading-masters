@@ -2889,6 +2889,10 @@ const PASOS_XUBIO = [
   ['ordenesDeCompra', 'Órdenes de compra'],
   ['facturasDeCompra', 'Facturas de compra'],
   ['pagos', 'Pagos'],
+  ['clientes', 'Clientes (VMOS)'],
+  ['productosDeVenta', 'Productos de venta'],
+  ['puntosDeVenta', 'Puntos de venta'],
+  ['presupuestos', 'Presupuestos'],
 ];
 
 // Diagnóstico de la conexión: qué devuelve Xubio, para decidir cómo se traen las compras.
@@ -2964,19 +2968,19 @@ function Xubio() {
               </tbody>
             </table>
           </div>
-          {['ordenesDeCompra', 'facturasDeCompra'].map((k) => res[k]?.muestra?.length > 0 && (
+          {['presupuestos', 'ordenesDeCompra', 'facturasDeCompra'].map((k) => res[k]?.muestra?.length > 0 && (
             <section key={k} className="tarjeta">
-              <div className="overline">{k === 'ordenesDeCompra' ? 'Órdenes de compra (últimas)' : 'Facturas de compra (últimas del rango)'}</div>
+              <div className="overline">{{ presupuestos: 'Presupuestos (últimos)', ordenesDeCompra: 'Órdenes de compra (últimas)', facturasDeCompra: 'Facturas de compra (últimas del rango)' }[k]}</div>
               {res[k].muestra.map((c, i) => (
                 <div key={i} className="muestra-xubio">
-                  <p><strong>{c.tipo ?? ''} {c.numero ?? '(sin número)'}</strong> · {c.fecha ?? '—'} · {c.proveedor ?? '—'} · total <span className="mono">{c.total ?? '—'}</span> {c.moneda ?? ''}{c.descripcion ? ` · ${c.descripcion}` : ''}</p>
+                  <p><strong>{c.tipo ?? ''} {c.numero ?? '(sin número)'}</strong> · {c.fecha ?? '—'} · {c.proveedor ?? c.cliente ?? '—'}{c.puntoVenta ? ` · PV ${c.puntoVenta}` : ''}{c.estado ? ` · ${c.estado}` : ''} · total <span className="mono">{c.total ?? '—'}</span> {c.moneda ?? ''}{c.descripcion ? ` · ${c.descripcion}` : ''}</p>
                   <div className="tabla-scroll">
                     <table className="tabla-ajuste">
-                      <thead><tr><th>Producto</th><th>Descripción</th><th>Centro de costo</th><th className="n">Importe</th></tr></thead>
+                      <thead><tr><th>Producto</th><th>Descripción</th><th>Centro de costo</th><th className="n">Cantidad</th><th className="n">Precio</th><th className="n">Importe</th></tr></thead>
                       <tbody>
-                        {c.renglones.length === 0 && <tr><td colSpan={4} className="aviso">Xubio no devolvió renglones.</td></tr>}
+                        {c.renglones.length === 0 && <tr><td colSpan={6} className="aviso">Xubio no devolvió renglones.</td></tr>}
                         {c.renglones.map((r, j) => (
-                          <tr key={j}><td>{r.producto ?? '—'}</td><td>{r.descripcion ?? '—'}</td><td>{r.centroDeCosto ?? '—'}</td><td className="n mono">{r.importe ?? '—'}</td></tr>
+                          <tr key={j}><td>{r.producto ?? '—'}</td><td>{r.descripcion ?? '—'}</td><td>{r.centroDeCosto ?? '—'}</td><td className="n mono">{r.cantidad ?? '—'}</td><td className="n mono">{r.precio ?? '—'}</td><td className="n mono">{r.importe ?? '—'}</td></tr>
                         ))}
                       </tbody>
                     </table>
