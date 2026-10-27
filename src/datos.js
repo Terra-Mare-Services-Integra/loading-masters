@@ -305,3 +305,38 @@ export async function actualizarPersona(id, cambios) {
 export async function guardarReferencia(clave, valor, descripcion = '') {
   ok(await supabase.from('referencias').upsert({ clave, valor, ...(descripcion ? { descripcion } : {}) }));
 }
+
+// ─── Evaluación de desempeño y bono semestral ────────────────────────────────
+
+const numOnull = (x) => (x === null || x === undefined ? null : Number(x));
+
+// Por semestre: { personaId: { evaluacion, reviews } }.
+export async function leerEvaluaciones() {
+  const [evals, reviews] = await Promise.all([
+    supabase.from('evaluaciones').select('*'),
+    supabase.from('reviews_360').select('*').order('created_at'),
+  ]);
+  const porId = {};
+  const porSemestre = {};
+  for (const e of ok(evals)) {
+    const ev = { ...e, presentismo: numOnull(e.presentismo), hse: numOnull(e.hse), bono_pagado_ars: numOnull(e.bono_pagado_ars) };
+    porId[e.id] = { evaluacion: ev, reviews: [] };
+    porSemestre[e.semestre] ??= {};
+    porSemestre[e.semestre][e.persona_id] = porId[e.id];
+  }
+  for (const r of ok(reviews)) porId[r.evaluacion_id]?.reviews.push({ ...r, puntaje: Number(r.puntaje) });
+  return porSemestre;
+}
+
+export async function guardarEvaluacion(personaId, semestre, cambios) {
+  return ok(await supabase.from('evaluaciones').upsert({ persona_id: personaId, semestre, ...cambios }, { onConflict: 'persona_id,semestre' })
+    .select('*').single());
+}
+
+export async function agregarReview(evaluacionId, review) {
+  return ok(await supabase.from('reviews_360').insert({ evaluacion_id: evaluacionId, ...review }).select('*').single());
+}
+
+export async function borrarReview(id) {
+  ok(await supabase.from('reviews_360').delete().eq('id', id));
+}

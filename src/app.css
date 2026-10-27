@@ -284,3 +284,12 @@ td.con-origen input{ cursor:text; }
 
 .participacion{ margin-top:40px; }
 .participacion input{ min-height:30px; padding:4px 6px; }
+
+/* Desempeño */
+.evaluacion{ margin-top:24px; }
+.resumen-eval{ display:flex; flex-direction:column; gap:2px; align-items:flex-end; text-align:right; }
+.eval-columnas{ margin-top:8px; align-items:start; }
+.eval-campos{ flex-direction:column; align-items:stretch; }
+.eval-campos input{ max-width:200px; }
+.nueva-review{ margin-top:8px; align-items:flex-end; }
+.nueva-review select{ min-height:34px; }

@@ -8,6 +8,7 @@ import { supabase, DOMINIOS } from './lib/supabase.js';
 import { armarProforma, comprimirTramos, expandirTramos } from './proforma/armar.js';
 import { renderProforma } from './proforma/plantilla.js';
 import * as db from './datos.js';
+import { semestresContrato, cumplimiento, fraccionSemestre, bonoSemestre } from './lib/desempeno.js';
 import { completarEscenario } from './lib/resultado.js';
 import { periodosContrato, periodosSueldos, calcularPnl, costoCapitanesMes, participacionPorAnio } from './lib/pnl.js';
 
@@ -141,6 +142,7 @@ function Certificacion() {
       {vista === 'formula' && <main><SeguimientoFormula /></main>}
       {vista === 'resultado' && <Resultado />}
       {vista === 'sueldos' && <Sueldos />}
+      {vista === 'desempeno' && <Desempeno />}
     </>
   );
 }
@@ -1225,13 +1227,14 @@ const MODULOS = [
   { id: 'formula', nombre: 'Fórmula de ajuste', desc: 'Índices, base y disparadores del Anexo II' },
   { id: 'resultado', nombre: 'Resultado', desc: 'P&L mes a mes: real y proyectado' },
   { id: 'sueldos', nombre: 'Sueldos', desc: 'Capitanes en relación de dependencia, mes a mes' },
+  { id: 'desempeno', nombre: 'Desempeño', desc: 'Evaluación semestral 360° y bono de los capitanes' },
   { id: 'operacion', nombre: 'Operación', desc: 'Sergio (superintendente, factura), vuelos, remises, hoteles, viáticos, EPP' },
   { id: 'vehiculo', nombre: 'Vehículo', desc: 'Camioneta, pólizas, services' },
   { id: 'vivienda', nombre: 'Vivienda', desc: 'Alquiler del departamento' },
   { id: 'administracion', nombre: 'Administración', desc: 'Estructura TM: Xubio, Office, celulares' },
   { id: 'seguros', nombre: 'Seguros', desc: 'RC del contrato y pólizas 1a–1c' },
 ];
-const ACTIVOS = ['facturaciones', 'formula', 'resultado', 'sueldos'];
+const ACTIVOS = ['facturaciones', 'formula', 'resultado', 'sueldos', 'desempeno'];
 
 function Inicio({ onAbrir }) {
   return (
@@ -1617,6 +1620,235 @@ function ParticipacionAnual({ filas, moneda, formato }) {
         </table>
       </div>
       {error && <p className="aviso error">Error: {error}</p>}
+    </section>
+  );
+}
+
+// ─── Desempeño: evaluación semestral y bono ──────────────────────────────────
+// Un semestre por cajita. Por capitán: performance (promedio de reviews 360°), presentismo y HSE,
+// ponderados según la base; el cumplimiento define el bono del semestre (proporcional a los días).
+
+const RELACIONES = { supervisor: 'Supervisor', par: 'Par', cliente: 'Cliente (VMOS)', autoevaluacion: 'Autoevaluación', otro: 'Otro' };
+const ESTADO_SEMESTRE = {
+  pagado: { color: 'verde', texto: 'Evaluado y bono pagado' },
+  cerrado: { color: 'amarilla', texto: 'Evaluado, bono a pagar' },
+  abierto: { color: 'gris', texto: 'Pendiente' },
+};
+
+function useDesempeno() {
+  const [datos, setDatos] = useState(null);
+  const [error, setError] = useState('');
+  const [version, setVersion] = useState(0);
+  useEffect(() => {
+    Promise.all([db.leerEscenarios(), db.leerPersonal(), db.leerEvaluaciones(), db.leerReferencia('evaluacion'),
+      db.leerDolarPorMes(CONTRATO_VMOS.inicioServicio.slice(0, 7))])
+      .then(([escenarios, personal, evaluaciones, config, dolar]) => {
+        const meses = escenarios.esperado?.supuestos?.mesesContrato;
+        if (!meses || !config?.pesos) throw new Error('Faltan los supuestos del contrato o la ponderación de la evaluación');
+        setDatos({ semestres: semestresContrato(meses), personal, evaluaciones, pesos: config.pesos, fx: dolar.ultimo });
+      })
+      .catch((e) => setError(e.message));
+  }, [version]);
+  return { datos, error, recargar: () => setVersion((v) => v + 1) };
+}
+
+const activosEn = (semestre, personal) => personal.filter((p) => fraccionSemestre(semestre, p) > 0);
+function estadoSemestre(semestre, personal, evaluaciones) {
+  const activos = activosEn(semestre, personal);
+  const evs = activos.map((p) => evaluaciones[semestre.clave]?.[p.id]?.evaluacion);
+  if (!activos.length || evs.some((e) => !e?.cerrada)) return 'abierto';
+  return evs.every((e) => e.bono_pagado_el) ? 'pagado' : 'cerrado';
+}
+
+function Desempeno() {
+  const { datos, error, recargar } = useDesempeno();
+  const [abierto, setAbierto] = useState(null);
+  const hoy = hoyIso();
+  if (!datos) return <main>{error ? <p className="aviso error">Error: {error}</p> : 'Cargando…'}</main>;
+
+  if (abierto) {
+    const semestre = datos.semestres.find((s) => s.clave === abierto);
+    return (
+      <main>
+        <button type="button" className="terciario volver-meses" onClick={() => { setAbierto(null); recargar(); }}>← Volver a los semestres</button>
+        <SemestreDesempeno semestre={semestre} datos={datos} onCambio={recargar} />
+      </main>
+    );
+  }
+
+  const p = datos.pesos;
+  return (
+    <main>
+      <section className="encabezado">
+        <div>
+          <h1>Desempeño.</h1>
+          <div className="filete" />
+          <p className="aviso">
+            Evaluación semestral de cada capitán, atada al bono que se paga por semestre: performance {dec(p.performance * 100, 0)} %
+            (reviews 360°: supervisor, pares, cliente y autoevaluación), presentismo {dec(p.presentismo * 100, 0)} % y
+            HSE {dec(p.hse * 100, 0)} %. El bono es proporcional a los días trabajados en el semestre.
+          </p>
+        </div>
+        <div className="leyenda">
+          {Object.values(ESTADO_SEMESTRE).map((e) => <span key={e.color}><span className={`bolita ${e.color}`} /> {e.texto}</span>)}
+        </div>
+      </section>
+      <div className="meses">
+        {datos.semestres.map((s) => {
+          const disponible = s.desde <= hoy;
+          const e = ESTADO_SEMESTRE[estadoSemestre(s, datos.personal, datos.evaluaciones)];
+          const maximo = activosEn(s, datos.personal).reduce((t, pe) => t + bonoSemestre(pe, s, 1).maximo, 0);
+          return (
+            <button key={s.clave} type="button" className="mes-card" disabled={!disponible}
+              title={disponible ? '' : `Se habilita el ${fecha(s.desde)}`} onClick={() => setAbierto(s.clave)}>
+              <span className="mes-fila"><span className="mes-n mono">{s.clave}</span><span className={`bolita ${e.color}`} title={e.texto} /></span>
+              <span className="mes-nombre">{s.nombre}</span>
+              <span className="mes-fechas mono">{fecha(s.desde)} – {fecha(s.hasta)}</span>
+              <span className="mes-monto mono proyectado">Bono máx. USD {dec(maximo, 0)}</span>
+            </button>
+          );
+        })}
+      </div>
+    </main>
+  );
+}
+
+function SemestreDesempeno({ semestre, datos, onCambio }) {
+  const activos = activosEn(semestre, datos.personal);
+  return (
+    <>
+      <section className="encabezado">
+        <div>
+          <h1>{semestre.nombre}.</h1>
+          <div className="periodo mono">{fecha(semestre.desde)} – {fecha(semestre.hasta)}</div>
+          <div className="filete" />
+        </div>
+      </section>
+      {activos.length === 0 && <p className="aviso">No hay capitanes activos en este semestre.</p>}
+      {activos.map((p) => (
+        <EvaluacionPersona key={p.id} persona={p} semestre={semestre} datos={datos} actual={datos.evaluaciones[semestre.clave]?.[p.id]} onCambio={onCambio} />
+      ))}
+    </>
+  );
+}
+
+function EvaluacionPersona({ persona, semestre, datos, actual, onCambio }) {
+  const [ev, setEv] = useState(actual?.evaluacion ?? { presentismo: null, hse: null, cerrada: false, bono_pagado_el: null, bono_pagado_ars: null });
+  const [reviews, setReviews] = useState(actual?.reviews ?? []);
+  const [nueva, setNueva] = useState({ evaluador: '', relacion: 'supervisor', puntaje: '', comentario: '' });
+  const [error, setError] = useState('');
+  const pendiente = useRef(null);
+
+  const c = cumplimiento(ev, reviews, datos.pesos);
+  const bono = bonoSemestre(persona, semestre, c.total);
+  const cerrada = Boolean(ev.cerrada);
+
+  async function asegurar() {
+    if (ev.id) return ev.id;
+    const fila = await db.guardarEvaluacion(persona.id, semestre.clave, {});
+    setEv((x) => ({ ...x, id: fila.id }));
+    return fila.id;
+  }
+
+  function cambiar(cambios, inmediato = false) {
+    const nuevo = { ...ev, ...cambios };
+    setEv(nuevo);
+    clearTimeout(pendiente.current);
+    const guardar = () => db.guardarEvaluacion(persona.id, semestre.clave, {
+      presentismo: nuevo.presentismo, hse: nuevo.hse, cerrada: Boolean(nuevo.cerrada),
+      bono_pagado_el: nuevo.bono_pagado_el || null, bono_pagado_ars: nuevo.bono_pagado_ars ?? null,
+    }).then((f) => setEv((x) => ({ ...x, id: f.id }))).then(onCambio).catch((e) => setError(e.message));
+    if (inmediato) guardar(); else pendiente.current = setTimeout(guardar, 800);
+  }
+
+  async function agregar() {
+    setError('');
+    const puntaje = Number(nueva.puntaje);
+    if (!nueva.evaluador.trim() || !(puntaje >= 0 && puntaje <= 100) || nueva.puntaje === '') {
+      setError('Completá quién evalúa y un puntaje de 0 a 100.');
+      return;
+    }
+    try {
+      const id = await asegurar();
+      const r = await db.agregarReview(id, { ...nueva, evaluador: nueva.evaluador.trim(), puntaje });
+      setReviews((rs) => [...rs, { ...r, puntaje: Number(r.puntaje) }]);
+      setNueva({ evaluador: '', relacion: nueva.relacion, puntaje: '', comentario: '' });
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  async function quitar(id) {
+    try {
+      await db.borrarReview(id);
+      setReviews((rs) => rs.filter((r) => r.id !== id));
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  const pct = (x) => (x === null || x === undefined ? '—' : `${dec(x, 1)} %`);
+  const numero = (k) => (
+    <input type="number" min="0" max="100" step="any" className="mono" value={ev[k] ?? ''} disabled={cerrada}
+      onChange={(e) => cambiar({ [k]: e.target.value === '' ? null : Math.min(100, Math.max(0, Number(e.target.value))) })} />
+  );
+
+  return (
+    <section className="tarjeta evaluacion">
+      <div className="ventana-cabeza">
+        <div>
+          <div className="ventana-titulo">{persona.nombre}</div>
+          <div className="aviso">{persona.rol === 'senior' ? 'Senior' : 'Junior'} · {dec(fraccionSemestre(semestre, persona) * 100, 0)} % del semestre trabajado</div>
+        </div>
+        <div className="resumen-eval">
+          <div><span className="etiqueta">Cumplimiento</span> <span className="mono fuerte">{c.completo ? pct(c.total * 100) : 'incompleto'}</span></div>
+          <div><span className="etiqueta">Bono</span> <span className="mono fuerte">USD {dec(bono.aPagar, 0)}</span> <span className="ayuda">de USD {dec(bono.maximo, 0)}</span></div>
+          {datos.fx && <div className="ayuda">≈ {pesos(bono.aPagar * datos.fx)} al dólar de hoy (se liquida al del día hábil anterior al pago)</div>}
+        </div>
+      </div>
+
+      <div className="columnas eval-columnas">
+        <div>
+          <div className="etiqueta">Performance · reviews 360° · {pct(c.performance)} <span className="ayuda">(peso {dec(datos.pesos.performance * 100, 0)} %)</span></div>
+          <table className="tabla-ajuste">
+            <tbody>
+              {reviews.map((r) => (
+                <tr key={r.id}>
+                  <td>{r.evaluador}<span className="ayuda"> · {RELACIONES[r.relacion]}</span>{r.comentario && <div className="ayuda">{r.comentario}</div>}</td>
+                  <td className="n mono">{dec(r.puntaje, 0)}</td>
+                  <td className="n">{!cerrada && <button type="button" className="terciario chico" onClick={() => quitar(r.id)}>Quitar</button>}</td>
+                </tr>
+              ))}
+              {reviews.length === 0 && <tr><td className="ayuda" colSpan={3}>Todavía no hay reviews.</td></tr>}
+            </tbody>
+          </table>
+          {!cerrada && (
+            <div className="campos nueva-review">
+              <label>Quién evalúa<input value={nueva.evaluador} onChange={(e) => setNueva({ ...nueva, evaluador: e.target.value })} /></label>
+              <label>Relación
+                <select value={nueva.relacion} onChange={(e) => setNueva({ ...nueva, relacion: e.target.value })}>
+                  {Object.entries(RELACIONES).map(([k, n]) => <option key={k} value={k}>{n}</option>)}
+                </select>
+              </label>
+              <label>Puntaje (0–100)<input type="number" min="0" max="100" className="corto" value={nueva.puntaje} onChange={(e) => setNueva({ ...nueva, puntaje: e.target.value })} /></label>
+              <label className="ancho">Comentario<input value={nueva.comentario} onChange={(e) => setNueva({ ...nueva, comentario: e.target.value })} /></label>
+              <button type="button" className="secundario" onClick={agregar}>Agregar review</button>
+            </div>
+          )}
+        </div>
+        <div className="campos eval-campos">
+          <label>Presentismo (%) <span className="ayuda">peso {dec(datos.pesos.presentismo * 100, 0)} %</span>{numero('presentismo')}</label>
+          <label>HSE (%) <span className="ayuda">peso {dec(datos.pesos.hse * 100, 0)} %</span>{numero('hse')}</label>
+          <label className="check">
+            <input type="checkbox" checked={cerrada} disabled={!c.completo && !cerrada} onChange={(e) => cambiar({ cerrada: e.target.checked }, true)} />
+            Evaluación cerrada
+          </label>
+          <label>Bono pagado el<input type="date" value={ev.bono_pagado_el ?? ''} disabled={!cerrada} onChange={(e) => cambiar({ bono_pagado_el: e.target.value || null }, true)} /></label>
+          <label>Monto pagado (ARS)<input type="number" min="0" step="any" className="mono" value={ev.bono_pagado_ars ?? ''} disabled={!cerrada}
+            onChange={(e) => cambiar({ bono_pagado_ars: e.target.value === '' ? null : Number(e.target.value) })} /></label>
+        </div>
+      </div>
+      {error && <p className="aviso error">{error}</p>}
     </section>
   );
 }
