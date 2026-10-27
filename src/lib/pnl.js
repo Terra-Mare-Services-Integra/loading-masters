@@ -125,8 +125,10 @@ const estado = (f) => (f?.cobradaEl ? 'cobrado' : f?.facturaEmitidaEl ? 'factura
  * @param {number|null} [p.costoSegurosUsd] costo mensual de las pólizas (si no, el del escenario)
  * @param {Record<string, Record<string, number>>} [p.sueldosReales]  por mes calendario: total real por persona
  * @param {Record<string, {compras: number, sergio: number, reembolsables: number}>} [p.gastos]  gastos de operación por mes calendario
+ * @param {Record<string, {total: number}>} [p.administracion]  gastos de administración por mes calendario
+ * @param {number|null} [p.administracionUsd]  presupuesto mensual de administración (si no, el del escenario)
  */
-export function calcularPnl({ periodos, facturaciones, personal, cargas, escenarios, ajustes = [], fx, inicioSeguros = null, inicioPleno = null, costoSegurosUsd = null, sueldosReales = {}, gastos = {} }) {
+export function calcularPnl({ periodos, facturaciones, personal, cargas, escenarios, ajustes = [], fx, inicioSeguros = null, inicioPleno = null, costoSegurosUsd = null, sueldosReales = {}, gastos = {}, administracion = {}, administracionUsd = null }) {
   // El factor de la proyección es el del último día de la última facturación cargada (p. ej. 0,75).
   const cargadas = periodos.map((p) => facturaciones[p.mes]).filter(Boolean);
   const ultima = cargadas.at(-1);
@@ -173,13 +175,14 @@ export function calcularPnl({ periodos, facturaciones, personal, cargas, escenar
     const polizas = conSeguros
       ? (costoSegurosUsd ?? esc.costoSegurosUsd) * tc * mesesEquivalentes(periodo, inicioSeguros)
       : 0;
-    const estructura = usd(esc.estructuraTmUsd);
     // Operación, Sergio y reembolsables por mes calendario: lo cargado en Operación reemplaza a lo
     // proyectado de ese mes (las compras y los honorarios de Sergio por separado).
     let operacion = 0;
     let sergioFijo = 0;
     let reembolsables = 0;
+    let estructura = 0;
     let operacionReal = false;
+    let administracionReal = false;
     for (let mes = periodo.desde.slice(0, 7); mes <= periodo.hasta.slice(0, 7); mes = mesSiguiente(mes)) {
       const tramo = {
         desde: mes === periodo.desde.slice(0, 7) ? periodo.desde : `${mes}-01`,
@@ -191,6 +194,10 @@ export function calcularPnl({ periodos, facturaciones, personal, cargas, escenar
       sergioFijo += g?.sergio > 0 ? g.sergio : esc.sgFijoUsd * factor * fx(mes) * m;
       reembolsables += g?.reembolsables ?? 0;
       operacionReal ||= Boolean(g?.compras > 0 || g?.sergio > 0);
+      // Administración: lo cargado del mes o el presupuesto mensual.
+      const a = administracion[mes];
+      estructura += a?.total > 0 ? a.total : (administracionUsd ?? esc.estructuraTmUsd) * fx(mes) * m;
+      administracionReal ||= a?.total > 0;
     }
     const impuestos = ingreso * (esc.pctImprevistos + esc.pctCredito + esc.pctIibb);
     const costosTotal = capitanes + operacion + polizas + estructura + sergioFijo + reembolsables + impuestos;
@@ -207,7 +214,7 @@ export function calcularPnl({ periodos, facturaciones, personal, cargas, escenar
       factor,
       fx: tc,
       ingresoCoc, ingresoSeguros, ingreso,
-      capitanes, sueldosReales: sueldosReales_, operacion, operacionReal, reembolsables, polizas, estructura, sergioFijo, impuestos,
+      capitanes, sueldosReales: sueldosReales_, operacion, operacionReal, reembolsables, polizas, estructura, administracionReal, sergioFijo, impuestos,
       // Sergio factura como proveedor: su fijo va dentro de Operación.
       operacionTotal: operacion + sergioFijo,
       bruto,

@@ -11,6 +11,7 @@ import * as db from './datos.js';
 import { RUBROS, resumenGastos, gastosPorMes, montoArs, etiquetaGasto } from './lib/operacion.js';
 import { semestresContrato, cumplimiento, fraccionSemestre, bonoSemestre } from './lib/desempeno.js';
 import { completarEscenario } from './lib/resultado.js';
+import { RUBROS_ADMIN, nombreRubroAdmin, presupuestoMensualUsd, resumenAdmin, adminPorMes, copiarAlMes } from './lib/administracion.js';
 import { costoMensualUsd, cronogramaCuotas, primaAnualUsd } from './lib/seguros.js';
 import { periodosContrato, periodosSueldos, calcularPnl, costoCapitanesMes, participacionPorAnio, mesesEquivalentes } from './lib/pnl.js';
 
@@ -147,6 +148,7 @@ function Certificacion() {
       {vista === 'desempeno' && <Desempeno />}
       {vista === 'operacion' && <Operacion />}
       {vista === 'seguros' && <Seguros />}
+      {vista === 'administracion' && <Administracion />}
     </>
   );
 }
@@ -161,9 +163,9 @@ function useContrato() {
     Promise.all([
       db.leerEscenarios(), db.listarFacturacionesPorMes(), db.leerPersonal(), db.leerReferencia('cargas_sociales'),
       db.leerReferencia('inicios'), db.leerAjustes(), db.leerDolarPorMes(CONTRATO_VMOS.inicioServicio.slice(0, 7)),
-      db.leerSueldosMes(), db.leerGastos(), db.leerReferencia('seguros'),
+      db.leerSueldosMes(), db.leerGastos(), db.leerReferencia('seguros'), db.leerGastosAdmin(), db.leerReferencia('administracion'),
     ])
-      .then(([escenarios, facturaciones, personal, cargas, inicios, ajustes, dolar, sueldos, gastos, seguros]) => {
+      .then(([escenarios, facturaciones, personal, cargas, inicios, ajustes, dolar, sueldos, gastos, seguros, gastosAdmin, administracion]) => {
         const esperado = escenarios.esperado && completarEscenario(escenarios.esperado.supuestos);
         const arranque = escenarios.arranque && completarEscenario(escenarios.arranque.supuestos);
         if (!esperado || !arranque || !cargas) throw new Error('Faltan los supuestos o las cargas sociales en la base de datos');
@@ -175,6 +177,8 @@ function useContrato() {
           ...m, reales: sueldos[m.mes] ?? {}, costo: costoCapitanesMes(m, personal, cargas, fx(m.mes), sueldosReales[m.mes]),
         }));
         const resumenGastosMes = gastosPorMes(gastos);
+        const resumenAdminMes = adminPorMes(gastosAdmin);
+        const presupuestoAdmin = administracion?.presupuestoUsd ?? {};
         const filas = calcularPnl({
           periodos, facturaciones, personal, cargas, fx, sueldosReales, gastos: resumenGastosMes,
           escenarios: { arranque, esperado },
@@ -182,6 +186,18 @@ function useContrato() {
           inicioSeguros: inicios?.seguros ?? null,
           inicioPleno: inicios?.operacionPlena ?? null,
           costoSegurosUsd: seguros?.polizas ? costoMensualUsd(seguros.polizas) : null,
+          administracion: resumenAdminMes,
+          administracionUsd: administracion ? presupuestoMensualUsd(presupuestoAdmin) : null,
+        });
+        // Administración por mes calendario: gastos cargados y el presupuesto.
+        const mesesAdministracion = periodosSueldos(esperado.mesesContrato).map((m) => {
+          const meq = mesesEquivalentes(m);
+          return {
+            ...m, meq, fx: fx(m.mes),
+            gastos: gastosAdmin.filter((g) => g.mes === m.mes),
+            resumen: resumenAdminMes[m.mes],
+            proyectado: presupuestoMensualUsd(presupuestoAdmin) * fx(m.mes) * meq,
+          };
         });
         // Operación por mes calendario: gastos cargados y la proyección (con el factor del período).
         const mesesOperacion = periodosSueldos(esperado.mesesContrato).map((m) => {
@@ -197,7 +213,7 @@ function useContrato() {
             proyectado: { operacion: esc.operacionUsd * fx(m.mes) * meq, sergio: esc.sgFijoUsd * factor * fx(m.mes) * meq },
           };
         });
-        setDatos({ periodos, facturaciones, personal, filas, mesesSueldos, mesesOperacion, dolarUltimo: dolar.ultimo, inicios: inicios ?? {}, seguros: seguros ?? { cuotas: 10, polizas: [] }, arranque });
+        setDatos({ periodos, facturaciones, personal, filas, mesesSueldos, mesesOperacion, mesesAdministracion, presupuestoAdmin, dolarUltimo: dolar.ultimo, inicios: inicios ?? {}, seguros: seguros ?? { cuotas: 10, polizas: [] }, arranque });
       })
       .catch((e) => setError(e.message));
   }, [version]);
@@ -1269,10 +1285,10 @@ const MODULOS = [
   { id: 'desempeno', nombre: 'Desempeño', desc: 'Evaluación semestral 360° y bono de los capitanes' },
   { id: 'operacion', nombre: 'Operación', desc: 'Compras y reembolsables: transporte, combustible, vivienda, EPP, Sergio' },
   { id: 'vehiculo', nombre: 'Vehículo', desc: 'Camioneta, pólizas, services' },
-  { id: 'administracion', nombre: 'Administración', desc: 'Estructura TM: Xubio, Office, celulares' },
+  { id: 'administracion', nombre: 'Administración', desc: 'Sistemas de sueldos y contable, telefonía, licencias, honorarios' },
   { id: 'seguros', nombre: 'Seguros', desc: 'RC y E&O: prima anual en cuotas, facturadas con los ítems 1a–1c' },
 ];
-const ACTIVOS = ['facturaciones', 'formula', 'resultado', 'sueldos', 'desempeno', 'operacion', 'seguros'];
+const ACTIVOS = ['facturaciones', 'formula', 'resultado', 'sueldos', 'desempeno', 'operacion', 'administracion', 'seguros'];
 
 function Inicio({ onAbrir }) {
   return (
@@ -1310,6 +1326,7 @@ const COLUMNAS_PNL = [
   ['operacionTotal', 'Operación (incl. Sergio)'],
   ['reembolsables', 'Reembolsables'],
   ['polizas', 'Seguros (pólizas)'],
+  ['estructura', 'Administración'],
   ['impuestos', 'Imprev. e impuestos'],
   ['bruto', 'Resultado bruto'],
   ['participacion', 'Particip. Sergio (provisión)'],
@@ -2152,13 +2169,16 @@ function Seguros() {
   const prima = primaAnualUsd(form.polizas);
   const fx = datos.dolarUltimo ?? datos.arranque.fx;
   const setPoliza = (i, cambios) => setForm({ ...form, polizas: form.polizas.map((p, j) => (j === i ? { ...p, ...cambios } : p)) });
+  const agregarPoliza = () => setForm({ ...form, polizas: [...form.polizas, { id: crypto.randomUUID(), nombre: '', primaAnualUsd: '' }] });
+  const quitarPoliza = (i) => setForm({ ...form, polizas: form.polizas.filter((_, j) => j !== i) });
 
   async function guardar() {
     setAviso('');
     try {
       const { inicio, ...seguros } = form;
       await db.guardarReferencia('seguros', {
-        ...seguros, cuotas, polizas: form.polizas.map((p) => ({ ...p, primaAnualUsd: Number(p.primaAnualUsd) || 0 })),
+        ...seguros, cuotas,
+        polizas: form.polizas.filter((p) => p.nombre.trim()).map((p) => ({ ...p, nombre: p.nombre.trim(), primaAnualUsd: Number(p.primaAnualUsd) || 0 })),
       });
       await db.guardarReferencia('inicios', { ...datos.inicios, seguros: inicio || null });
       setAviso('Guardado');
@@ -2193,24 +2213,26 @@ function Seguros() {
         </div>
         <div className="tabla-scroll">
           <table className="tabla-ajuste">
-            <thead><tr><th>Póliza</th><th>Prima anual (USD)</th><th>Por mes en el Resultado</th><th>Cuota</th></tr></thead>
+            <thead><tr><th>Póliza</th><th>Prima anual (USD)</th><th>Por mes en el Resultado</th><th>Cuota</th><th /></tr></thead>
             <tbody>
               {form.polizas.map((p, i) => (
                 <tr key={p.id}>
-                  <td>{p.nombre}</td>
+                  <td><input value={p.nombre} placeholder="Aseguradora, cobertura y límite" onChange={(e) => setPoliza(i, { nombre: e.target.value })} /></td>
                   <td><input type="number" min="0" step="0.01" className="mono" value={p.primaAnualUsd}
                     onChange={(e) => setPoliza(i, { primaAnualUsd: e.target.value })} /></td>
                   <td className="n mono">{usdFmt(Number(p.primaAnualUsd || 0) / 12)}</td>
                   <td className="n mono">{usdFmt(Number(p.primaAnualUsd || 0) / cuotas)}</td>
+                  <td><button type="button" className="terciario chico" onClick={() => quitarPoliza(i)}>Quitar</button></td>
                 </tr>
               ))}
             </tbody>
             <tfoot>
-              <tr><td>Total</td><td className="n mono">{usdFmt(prima)}</td><td className="n mono">{usdFmt(prima / 12)}</td><td className="n mono">{usdFmt(prima / cuotas)}</td></tr>
+              <tr><td>Total</td><td className="n mono">{usdFmt(prima)}</td><td className="n mono">{usdFmt(prima / 12)}</td><td className="n mono">{usdFmt(prima / cuotas)}</td><td /></tr>
             </tfoot>
           </table>
         </div>
         <div className="acciones">
+          <button type="button" className="secundario" onClick={agregarPoliza}>Agregar póliza</button>
           <button type="button" onClick={guardar}>Guardar</button>
           {aviso && <span className={`ayuda ${aviso.startsWith('Error') ? 'error' : ''}`}>{aviso}</span>}
         </div>
@@ -2226,7 +2248,7 @@ function Seguros() {
           <div className="tabla-scroll">
             <table className="tabla-ajuste">
               <thead>
-                <tr><th>Mes</th><th>Vigencia</th><th>Cuota</th>{form.polizas.map((p) => <th key={p.id}>{p.corto ?? p.nombre}</th>)}<th>Total USD</th><th>Total $</th></tr>
+                <tr><th>Mes</th><th>Vigencia</th><th>Cuota</th>{form.polizas.map((p) => <th key={p.id}>{p.nombre}</th>)}<th>Total USD</th><th>Total $</th></tr>
               </thead>
               <tbody>
                 {cronograma.map((c) => (
@@ -2234,7 +2256,7 @@ function Seguros() {
                     <td>{nombreMes(c.mes)}</td>
                     <td className="n mono">{c.vigencia}</td>
                     <td className="n mono">{c.cuota}/{cuotas}</td>
-                    {form.polizas.map((p) => <td key={p.id} className="n mono">{dec(c.porPoliza[p.id])}</td>)}
+                    {form.polizas.map((p) => <td key={p.id} className="n mono">{dec(c.porPoliza[p.id] || 0)}</td>)}
                     <td className="n mono">{dec(c.totalUsd)}</td>
                     <td className="n mono">{pesos(c.totalUsd * fx)}</td>
                   </tr>
@@ -2245,5 +2267,270 @@ function Seguros() {
         </section>
       )}
     </main>
+  );
+}
+
+// ─── Administración ──────────────────────────────────────────────────────────
+
+function Administracion() {
+  const { datos, error, recargar } = useContrato();
+  const [abierto, setAbierto] = useState(null);
+  const hoy = hoyIso();
+  if (!datos) return <main>{error ? <p className="aviso error">Error: {error}</p> : 'Cargando…'}</main>;
+
+  if (abierto) {
+    const i = datos.mesesAdministracion.findIndex((m) => m.mes === abierto);
+    return (
+      <main>
+        <button type="button" className="terciario volver-meses" onClick={() => { setAbierto(null); recargar(); }}>← Volver a los meses</button>
+        <GastosAdminMes mes={datos.mesesAdministracion[i]} anterior={datos.mesesAdministracion[i - 1]} datos={datos} onCambio={recargar} />
+      </main>
+    );
+  }
+
+  return (
+    <main>
+      <section className="encabezado">
+        <div>
+          <h1>Administración.</h1>
+          <div className="filete" />
+          <p className="aviso">
+            Estructura de Terra Mare para el contrato, un mes por cajita: sistemas de sueldos y contable, telefonía, licencias,
+            honorarios. Si un mes tiene gastos cargados, reemplazan al presupuesto en el Resultado.
+          </p>
+        </div>
+        <div className="leyenda">
+          {Object.values(ESTADO_GASTOS).map((e) => <span key={e.color}><span className={`bolita ${e.color}`} /> {e.texto}</span>)}
+        </div>
+      </section>
+
+      <PresupuestoAdmin presupuesto={datos.presupuestoAdmin} fx={datos.dolarUltimo ?? datos.arranque.fx} onCambio={recargar} />
+
+      <div className="meses">
+        {datos.mesesAdministracion.map((m) => {
+          const disponible = m.desde <= hoy;
+          const e = ESTADO_GASTOS[estadoGastos(m.resumen)];
+          const cargado = m.resumen?.cantidad > 0;
+          return (
+            <button key={m.mes} type="button" className={`mes-card ${cargado ? 'cargada' : ''}`} disabled={!disponible}
+              title={disponible ? '' : `Se habilita el ${fecha(m.desde)}`} onClick={() => setAbierto(m.mes)}>
+              <span className="mes-fila"><span className="mes-n mono">{String(m.n).padStart(2, '0')}</span><span className={`bolita ${e.color}`} title={e.texto} /></span>
+              <span className="mes-nombre">{m.nombre}</span>
+              <span className="mes-fechas mono">{fecha(m.desde)} – {fecha(m.hasta)}</span>
+              <span className={`mes-monto mono ${cargado ? '' : 'proyectado'}`}>{millones(cargado ? m.resumen.total : m.proyectado)}</span>
+            </button>
+          );
+        })}
+      </div>
+    </main>
+  );
+}
+
+// Presupuesto mensual en USD por rubro: es la proyección de los meses sin gastos cargados.
+function PresupuestoAdmin({ presupuesto, fx, onCambio }) {
+  const [valores, setValores] = useState(() => ({ ...presupuesto }));
+  const [aviso, setAviso] = useState('');
+  const total = presupuestoMensualUsd(valores);
+
+  async function guardar() {
+    setAviso('');
+    try {
+      const limpio = Object.fromEntries(Object.entries(valores).map(([k, v]) => [k, Number(v) || 0]).filter(([, v]) => v > 0));
+      await db.guardarReferencia('administracion', { presupuestoUsd: limpio }, 'Presupuesto mensual de administración en USD, por rubro');
+      setAviso('Guardado');
+      onCambio();
+    } catch (e) {
+      setAviso(`Error: ${e.message}`);
+    }
+  }
+
+  return (
+    <section className="tarjeta presupuesto-admin">
+      <div className="overline">Presupuesto mensual (proyección)</div>
+      <div className="tabla-scroll">
+        <table className="tabla-ajuste">
+          <thead><tr><th>Rubro</th><th>USD por mes</th></tr></thead>
+          <tbody>
+            {RUBROS_ADMIN.map((ru) => (
+              <tr key={ru.id}>
+                <td>{ru.nombre}</td>
+                <td><input type="number" min="0" step="any" className="mono" value={valores[ru.id] ?? ''}
+                  onChange={(e) => setValores({ ...valores, [ru.id]: e.target.value })} /></td>
+              </tr>
+            ))}
+          </tbody>
+          <tfoot><tr><td>Total</td><td className="n mono">USD {dec(total)} <span className="ayuda">≈ {pesos(total * fx)}</span></td></tr></tfoot>
+        </table>
+      </div>
+      <div className="acciones">
+        <button type="button" onClick={guardar}>Guardar presupuesto</button>
+        {aviso && <span className={`ayuda ${aviso.startsWith('Error') ? 'error' : ''}`}>{aviso}</span>}
+      </div>
+    </section>
+  );
+}
+
+const gastoAdminVacio = (mes, fechaDefecto) => ({
+  mes: mes.mes, fecha: fechaDefecto, rubro: RUBROS_ADMIN[0].id, descripcion: '', proveedor: '', factura_numero: '',
+  moneda: 'ARS', monto: '', iva_pct: 0.21, tipo_cambio: null, pagado_el: null, pagado_por: '',
+});
+
+function GastosAdminMes({ mes, anterior, datos, onCambio }) {
+  const [gastos, setGastos] = useState(mes.gastos);
+  const hoy = hoyIso();
+  const fechaDefecto = hoy >= mes.desde && hoy <= mes.hasta ? hoy : mes.desde;
+  const [nuevo, setNuevo] = useState(() => gastoAdminVacio(mes, fechaDefecto));
+  const [error, setError] = useState('');
+  const r = resumenAdmin(gastos);
+  const tc = datos.dolarUltimo;
+  const numeros = (g) => ({ ...g, monto: Number(g.monto), iva_pct: Number(g.iva_pct), tipo_cambio: g.tipo_cambio && Number(g.tipo_cambio) });
+
+  async function guardar() {
+    setError('');
+    const monto = Number(nuevo.monto);
+    if (!(monto > 0)) return setError('Cargá un monto mayor a cero.');
+    if (nuevo.moneda === 'USD' && !(Number(nuevo.tipo_cambio) > 0)) return setError('Para un gasto en USD cargá el tipo de cambio.');
+    if (!nuevo.fecha) return setError('Cargá la fecha del gasto.');
+    try {
+      const g = await db.guardarGastoAdmin({
+        ...nuevo, monto, iva_pct: Number(nuevo.iva_pct) || 0,
+        tipo_cambio: nuevo.moneda === 'USD' ? Number(nuevo.tipo_cambio) : null, pagado_el: nuevo.pagado_el || null,
+      });
+      setGastos((gs) => [...gs, numeros(g)]);
+      setNuevo({ ...gastoAdminVacio(mes, nuevo.fecha), rubro: nuevo.rubro });
+      onCambio();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  // Los abonos se repiten: copia los gastos del mes anterior (sin la fecha de pago) para corregir montos.
+  async function copiarAnterior() {
+    setError('');
+    if (!anterior?.gastos.length) return setError('El mes anterior no tiene gastos cargados.');
+    if (!confirm(`¿Copiar los ${anterior.gastos.length} gastos de ${anterior.nombre}?`)) return;
+    try {
+      const nuevos = await db.guardarGastosAdmin(copiarAlMes(anterior.gastos, mes.mes));
+      setGastos((gs) => [...gs, ...nuevos.map(numeros)]);
+      onCambio();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  async function actualizar(g, cambios) {
+    try {
+      const f = await db.guardarGastoAdmin({ ...g, ...cambios });
+      setGastos((gs) => gs.map((x) => (x.id === g.id ? numeros({ ...x, ...f }) : x)));
+      onCambio();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  async function borrar(g) {
+    if (!confirm(`¿Borrar "${nombreRubroAdmin(g.rubro)} · ${g.descripcion || g.proveedor}"?`)) return;
+    try {
+      await db.borrarGastoAdmin(g.id);
+      setGastos((gs) => gs.filter((x) => x.id !== g.id));
+      onCambio();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  const set = (c) => setNuevo((x) => ({ ...x, ...c }));
+  const rubrosConGastos = RUBROS_ADMIN.filter((ru) => r.porRubro[ru.id]);
+
+  return (
+    <>
+      <section className="encabezado">
+        <div>
+          <h1 className="capitalizar">{mes.nombre}.</h1>
+          <div className="periodo mono">{fecha(mes.desde)} – {fecha(mes.hasta)}</div>
+          <div className="filete" />
+        </div>
+        <div className="resumen-eval">
+          <div><span className="etiqueta">Administración</span> <span className="mono fuerte">{pesos(r.total)}</span> <span className="ayuda">presupuesto {pesos(mes.proyectado)}</span></div>
+        </div>
+      </section>
+      <p className="aviso">Montos sin IVA. Si el mes tiene gastos cargados, reemplazan al presupuesto en el Resultado.</p>
+
+      {rubrosConGastos.length > 0 && (
+        <div className="tabla-scroll">
+          <table className="tabla-ajuste rubros">
+            <thead><tr><th>Rubro</th><th className="n">Real</th><th className="n">Presupuesto</th></tr></thead>
+            <tbody>
+              {rubrosConGastos.map((ru) => (
+                <tr key={ru.id}>
+                  <td>{ru.nombre}</td>
+                  <td className="n mono">{pesos(r.porRubro[ru.id])}</td>
+                  <td className="n mono">{datos.presupuestoAdmin[ru.id] ? pesos(datos.presupuestoAdmin[ru.id] * mes.fx * mes.meq) : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <section className="tarjeta nuevo-gasto">
+        <div className="ventana-cabeza">
+          <div className="overline">Nuevo gasto</div>
+          {anterior && <button type="button" className="terciario chico" onClick={copiarAnterior}>Copiar gastos de {anterior.nombre}</button>}
+        </div>
+        <div className="campos">
+          <label>Rubro
+            <select value={nuevo.rubro} onChange={(e) => set({ rubro: e.target.value })}>
+              {RUBROS_ADMIN.map((ru) => <option key={ru.id} value={ru.id}>{ru.nombre}</option>)}
+            </select>
+          </label>
+          <label>Fecha<input type="date" value={nuevo.fecha} onChange={(e) => set({ fecha: e.target.value })} /></label>
+          <label className="ancho">Descripción<input value={nuevo.descripcion} onChange={(e) => set({ descripcion: e.target.value })} /></label>
+        </div>
+        <div className="campos">
+          <label>Proveedor<input value={nuevo.proveedor} onChange={(e) => set({ proveedor: e.target.value })} /></label>
+          <label>Factura N°<input value={nuevo.factura_numero} onChange={(e) => set({ factura_numero: e.target.value })} /></label>
+          <label>Moneda
+            <select value={nuevo.moneda} onChange={(e) => set({ moneda: e.target.value, tipo_cambio: e.target.value === 'USD' ? (nuevo.tipo_cambio ?? tc) : null })}>
+              <option value="ARS">ARS</option><option value="USD">USD</option>
+            </select>
+          </label>
+          <label>Monto sin IVA<input type="number" min="0" step="any" className="mono" value={nuevo.monto} onChange={(e) => set({ monto: e.target.value })} /></label>
+          {nuevo.moneda === 'USD' && <label>Tipo de cambio<input type="number" min="0" step="any" className="mono corto" value={nuevo.tipo_cambio ?? ''} onChange={(e) => set({ tipo_cambio: e.target.value })} /></label>}
+          <label>IVA
+            <select value={nuevo.iva_pct} onChange={(e) => set({ iva_pct: Number(e.target.value) })}>
+              <option value={0}>Sin IVA</option><option value={0.105}>10,5 %</option><option value={0.21}>21 %</option><option value={0.27}>27 %</option>
+            </select>
+          </label>
+          <label>Pagado el<input type="date" value={nuevo.pagado_el ?? ''} onChange={(e) => set({ pagado_el: e.target.value || null })} /></label>
+          <label>Pagado por<input value={nuevo.pagado_por} placeholder="Terra Mare" onChange={(e) => set({ pagado_por: e.target.value })} /></label>
+          <button type="button" onClick={guardar}>Agregar</button>
+        </div>
+        {error && <p className="aviso error">{error}</p>}
+      </section>
+
+      <div className="tabla-scroll">
+        <table className="tabla-sueldos gastos">
+          <thead>
+            <tr><th>Fecha</th><th>Rubro</th><th>Descripción</th><th>Proveedor · factura</th><th className="n">Monto</th><th className="n">ARS sin IVA</th><th>Pagado el</th><th /></tr>
+          </thead>
+          <tbody>
+            {gastos.length === 0 && <tr><td colSpan={8} className="aviso">Todavía no hay gastos cargados en este mes.</td></tr>}
+            {gastos.map((g) => (
+              <tr key={g.id}>
+                <td className="mono">{fecha(g.fecha)}</td>
+                <td>{nombreRubroAdmin(g.rubro)}</td>
+                <td>{g.descripcion}</td>
+                <td>{g.proveedor}{g.factura_numero && <span className="ayuda"> · {g.factura_numero}</span>}</td>
+                <td className="n mono">{g.moneda === 'USD' ? `USD ${dec(g.monto, 2)}` : pesos(g.monto)}{g.moneda === 'USD' && <div className="ayuda">TC {dec(g.tipo_cambio, 2)}</div>}</td>
+                <td className="n mono fuerte">{pesos(montoArs(g))}</td>
+                <td><input type="date" value={g.pagado_el ?? ''} onChange={(e) => actualizar(g, { pagado_el: e.target.value || null })} /></td>
+                <td><button type="button" className="terciario chico" onClick={() => borrar(g)}>Borrar</button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
   );
 }

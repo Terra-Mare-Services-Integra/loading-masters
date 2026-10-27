@@ -362,3 +362,25 @@ export async function marcarReembolsablesFacturados(ids, mes) {
   if (!ids.length) return;
   ok(await supabase.from('gastos_operacion').update({ facturado_en: mes }).in('id', ids));
 }
+
+// ─── Gastos de administración ────────────────────────────────────────────────
+
+export async function leerGastosAdmin() {
+  return ok(await supabase.from('gastos_administracion').select('*').order('fecha').order('created_at'))
+    .map((g) => ({ ...g, monto: Number(g.monto), iva_pct: Number(g.iva_pct), tipo_cambio: g.tipo_cambio === null ? null : Number(g.tipo_cambio) }));
+}
+
+export async function guardarGastoAdmin(gasto) {
+  const { id, created_at, updated_at, updated_by, ...campos } = gasto;
+  const q = id ? supabase.from('gastos_administracion').update(campos).eq('id', id) : supabase.from('gastos_administracion').insert(campos);
+  return ok(await q.select('*').single());
+}
+
+export async function guardarGastosAdmin(gastos) {
+  if (!gastos.length) return [];
+  return ok(await supabase.from('gastos_administracion').insert(gastos).select('*'));
+}
+
+export async function borrarGastoAdmin(id) {
+  ok(await supabase.from('gastos_administracion').delete().eq('id', id));
+}
