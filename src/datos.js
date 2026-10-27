@@ -272,3 +272,32 @@ export async function leerDolarPorMes(desdeMes) {
   const ultimo = filas.length ? Number(filas.at(-1).valor) : null;
   return { porMes: primero, ultimo };
 }
+
+// ─── Sueldos reales por mes ──────────────────────────────────────────────────
+
+const CAMPOS_SUELDO = ['bruto_ars', 'cargas_ars', 'osde_ars', 'bono_ars', 'otros_ars'];
+export const totalSueldo = (f) => CAMPOS_SUELDO.reduce((s, k) => s + Number(f[k] ?? 0), 0);
+
+// Por mes: { personaId: fila } (montos como números).
+export async function leerSueldosMes() {
+  const filas = ok(await supabase.from('sueldos_mes').select('*'));
+  const porMes = {};
+  for (const f of filas) {
+    porMes[f.mes] ??= {};
+    porMes[f.mes][f.persona_id] = { ...f, ...Object.fromEntries(CAMPOS_SUELDO.map((k) => [k, Number(f[k])])) };
+  }
+  return porMes;
+}
+
+export async function guardarSueldo(mes, personaId, valores) {
+  return ok(await supabase.from('sueldos_mes').upsert({ mes, persona_id: personaId, ...valores }, { onConflict: 'mes,persona_id' })
+    .select('*').single());
+}
+
+export async function borrarSueldo(mes, personaId) {
+  ok(await supabase.from('sueldos_mes').delete().eq('mes', mes).eq('persona_id', personaId));
+}
+
+export async function actualizarPersona(id, cambios) {
+  ok(await supabase.from('personal').update(cambios).eq('id', id));
+}

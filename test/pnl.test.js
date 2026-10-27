@@ -69,3 +69,41 @@ test('P&L: proyección, facturación real y capitanes que entran después', () =
   assert.ok(ene.ingreso > 0, 'enero se proyecta con el precio del contrato');
   cerca(totalesPnl(filas).generacion, ene.generacion + feb.generacion, 'totales');
 });
+
+import { periodosSueldos, costoCapitanesMes } from '../src/lib/pnl.js';
+
+test('meses de sueldos: arrancan en el mes del inicio, proporcional', () => {
+  const p = periodosSueldos(2, '2026-10-26');
+  assert.deepEqual(p.map((x) => [x.mes, x.desde, x.hasta]), [
+    ['2026-10', '2026-10-26', '2026-10-31'],
+    ['2026-11', '2026-11-01', '2026-11-30'],
+    ['2026-12', '2026-12-01', '2026-12-25'],
+  ]);
+});
+
+test('costo de capitanes de un mes: real por persona si está cargado, si no proyectado', () => {
+  const [oct] = periodosSueldos(2, '2026-10-26');
+  const personal = [
+    { id: 'a', sueldoBrutoArs: 1_200_000, osdeCostoArs: 150_000, bonoAnualUsd: 0, inicio: '2026-10-26', fin: null },
+    { id: 'b', sueldoBrutoArs: 1_200_000, osdeCostoArs: 150_000, bonoAnualUsd: 0, inicio: '2026-10-26', fin: null },
+    { id: 'c', sueldoBrutoArs: 1_200_000, osdeCostoArs: 150_000, bonoAnualUsd: 0, inicio: null, fin: null },
+  ];
+  const sinReales = costoCapitanesMes(oct, personal, CARGAS, 1_100);
+  assert.equal(sinReales.porPersona.length, 2, 'el que no tiene fecha no cuenta');
+  cerca(sinReales.total, 2 * 1_707_800 * 6 / 31, 'proporcional del 26 al 31');
+  const conUno = costoCapitanesMes(oct, personal, CARGAS, 1_100, { a: 400_000 });
+  assert.equal(conUno.conReales, true);
+  cerca(conUno.total, 400_000 + 1_707_800 * 6 / 31, 'uno real y otro proyectado');
+});
+
+test('P&L: el primer período suma octubre y noviembre de sueldos, con lo real cargado', () => {
+  const periodos = periodosContrato(1, '2026-10-26').slice(0, 1);
+  const esc = completarEscenario({ factorPrecio: 0.5 });
+  const personal = [{ id: 'a', sueldoBrutoArs: 1_200_000, osdeCostoArs: 150_000, bonoAnualUsd: 0, inicio: '2026-10-26', fin: null }];
+  const [fila] = calcularPnl({
+    periodos, facturaciones: {}, personal, cargas: CARGAS, escenarios: { arranque: esc, esperado: esc }, fx: () => 1_100,
+    sueldosReales: { '2026-11': { a: 2_000_000 } },
+  });
+  cerca(fila.capitanes, 1_707_800 * 6 / 31 + 2_000_000, 'octubre proyectado + noviembre real');
+  assert.equal(fila.sueldosReales, true);
+});

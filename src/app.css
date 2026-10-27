@@ -268,3 +268,16 @@ td.con-origen input{ cursor:text; }
 .tabla-pnl tfoot td{ font-weight:600; background:var(--tm-blue-deep); color:var(--tm-white); border:0; }
 .notas-pnl{ margin-top:16px; }
 @media (max-width: 900px){ .barra-volver{ padding:8px 16px; } }
+
+/* Sueldos */
+.capitanes{ margin-top:24px; }
+.capitanes input{ min-height:30px; padding:4px 6px; }
+.capitanes tr.sin-fecha td{ color:var(--text-muted); }
+.tabla-sueldos{ width:100%; border-collapse:collapse; font-size:13px; margin-top:12px; }
+.tabla-sueldos th{ text-align:left; font-size:12px; font-weight:600; padding:8px; border-bottom:1px solid var(--tm-blue-light); white-space:nowrap; }
+.tabla-sueldos td{ padding:6px 8px; border-bottom:1px solid var(--border-subtle); white-space:nowrap; }
+.tabla-sueldos .n{ text-align:right; }
+.tabla-sueldos input{ width:130px; text-align:right; min-height:30px; padding:4px 6px; }
+.tabla-sueldos input[type=date]{ width:auto; text-align:left; }
+.tabla-sueldos tfoot td{ font-weight:600; background:var(--tm-surface); }
+.capitalizar{ text-transform:capitalize; }

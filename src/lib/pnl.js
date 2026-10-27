@@ -64,6 +64,46 @@ export function costoEmpleado(persona, c) {
   return {
     ars: remuneracion + cargas + sindical + deltaOsde,
     bonoUsd: bonoUsd * (1 + c.pctCargas + c.pctArt + c.pctSac + c.pctSindical),
+    detalle: { remuneracion, cargas: cargas + sindical, osde: deltaOsde },
+  };
+}
+
+/**
+ * Meses de sueldos: un período por mes calendario desde el inicio del servicio (octubre, proporcional
+ * del 26 al 31) hasta el último día del contrato.
+ */
+export function periodosSueldos(meses, inicio = CONTRATO_VMOS.inicioServicio) {
+  const [y, m, d] = inicio.split('-').map(Number);
+  const fin = sumarDias(iso(new Date(Date.UTC(y, m - 1 + meses, d))), -1);
+  const periodos = [];
+  for (let mes = inicio.slice(0, 7), n = 1; mes <= fin.slice(0, 7); mes = mesSiguiente(mes), n++) {
+    periodos.push({
+      n, mes, nombre: nombreMes(mes),
+      desde: mes === inicio.slice(0, 7) ? inicio : `${mes}-01`,
+      hasta: mes === fin.slice(0, 7) ? fin : finDeMes(mes),
+    });
+  }
+  return periodos;
+}
+
+/**
+ * Costo de capitanes de un mes calendario. Por persona: lo real si está cargado (sueldos_mes) y si no,
+ * el costo proyectado proporcional a los días activos del mes.
+ * @param {Record<string, number>} [reales] total real por id de persona en ese mes
+ */
+export function costoCapitanesMes(periodoMes, personal, cargas, tc, reales = {}) {
+  const porPersona = personal.filter((pe) => pe.inicio).map((pe) => {
+    const meq = mesesEquivalentes(periodoMes, pe.inicio, pe.fin);
+    const c = costoEmpleado(pe, cargas);
+    const proyectado = (c.ars + c.bonoUsd * tc) * meq;
+    const real = reales[pe.id];
+    return { persona: pe, meq, proyectado, real: real ?? null, costo: real ?? proyectado, detalle: c.detalle };
+  }).filter((x) => x.meq > 0 || x.real !== null);
+  return {
+    porPersona,
+    proyectado: porPersona.reduce((s, x) => s + x.proyectado, 0),
+    total: porPersona.reduce((s, x) => s + x.costo, 0),
+    conReales: porPersona.some((x) => x.real !== null),
   };
 }
 
@@ -80,14 +120,14 @@ const estado = (f) => (f?.cobradaEl ? 'cobrado' : f?.facturaEmitidaEl ? 'factura
  * @param {object[]} p.ajustes             ajustes de precio aprobados
  * @param {(mes: string) => number} p.fx   tipo de cambio ARS/USD de cada mes
  * @param {string|null} p.inicioSeguros    desde cuándo se facturan y pagan las pólizas (null = todavía no)
+ * @param {Record<string, Record<string, number>>} [p.sueldosReales]  por mes calendario: total real por persona
  */
-export function calcularPnl({ periodos, facturaciones, personal, cargas, escenarios, ajustes = [], fx, inicioSeguros = null }) {
+export function calcularPnl({ periodos, facturaciones, personal, cargas, escenarios, ajustes = [], fx, inicioSeguros = null, sueldosReales = {} }) {
   // El factor de la proyección es el del último día de la última facturación cargada (p. ej. 0,75).
   const cargadas = periodos.map((p) => facturaciones[p.mes]).filter(Boolean);
   const ultima = cargadas.at(-1);
   const factorVigente = ultima?.factores?.['1']?.[ultima.hasta] ?? escenarios.arranque.factorPrecio;
 
-  const costos = personal.map((pe) => ({ pe, c: costoEmpleado(pe, cargas) }));
 
   return periodos.map((periodo) => {
     const f = facturaciones[periodo.mes];
@@ -110,11 +150,19 @@ export function calcularPnl({ periodos, facturaciones, personal, cargas, escenar
     const ingresoSeguros = conSeguros ? usd(esc.ingresoSegurosUsd) : 0;
     const ingreso = ingresoCoc + ingresoSeguros;
 
-    const capitanes = costos.reduce((s, { pe, c }) => {
-      if (!pe.inicio) return s;
-      const m = mesesEquivalentes(periodo, pe.inicio, pe.fin);
-      return s + (c.ars + c.bonoUsd * tc) * m;
-    }, 0);
+    // Capitanes: suma de los meses calendario que abarca el período (el primero incluye octubre).
+    let capitanes = 0;
+    let sueldosReales_ = false;
+    for (let mes = periodo.desde.slice(0, 7); mes <= periodo.hasta.slice(0, 7); mes = mesSiguiente(mes)) {
+      const tramo = {
+        mes,
+        desde: mes === periodo.desde.slice(0, 7) ? periodo.desde : `${mes}-01`,
+        hasta: mes === periodo.hasta.slice(0, 7) ? periodo.hasta : finDeMes(mes),
+      };
+      const c = costoCapitanesMes(tramo, personal, cargas, fx(mes), sueldosReales[mes]);
+      capitanes += c.total;
+      sueldosReales_ ||= c.conReales;
+    }
     const operacion = usd(esc.operacionUsd);
     const polizas = conSeguros ? usd(esc.costoSegurosUsd) : 0;
     const estructura = usd(esc.estructuraTmUsd);
@@ -134,7 +182,9 @@ export function calcularPnl({ periodos, facturaciones, personal, cargas, escenar
       factor,
       fx: tc,
       ingresoCoc, ingresoSeguros, ingreso,
-      capitanes, operacion, polizas, estructura, sergioFijo, impuestos,
+      capitanes, sueldosReales: sueldosReales_, operacion, polizas, estructura, sergioFijo, impuestos,
+      // Sergio factura como proveedor: su fijo va dentro de Operación.
+      operacionTotal: operacion + sergioFijo,
       bruto,
       participacion,
       generacion: bruto - participacion,
@@ -144,7 +194,7 @@ export function calcularPnl({ periodos, facturaciones, personal, cargas, escenar
 
 // Sumas de una lista de filas del P&L.
 export function totalesPnl(filas) {
-  const campos = ['ingresoCoc', 'ingresoSeguros', 'ingreso', 'capitanes', 'operacion', 'polizas', 'estructura', 'sergioFijo', 'impuestos', 'bruto', 'participacion', 'generacion'];
+  const campos = ['ingresoCoc', 'ingresoSeguros', 'ingreso', 'capitanes', 'operacion', 'operacionTotal', 'polizas', 'estructura', 'sergioFijo', 'impuestos', 'bruto', 'participacion', 'generacion'];
   return Object.fromEntries(campos.map((k) => [k, filas.reduce((s, f) => s + f[k], 0)]));
 }
 

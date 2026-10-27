@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import logoUrl from '../assets/isologo-horizontal-azul.png';
 import { CONTRATO_VMOS } from './lib/contrato.js';
-import { periodoDeCierre } from './lib/certificacion.js';
+import { periodoDeCierre, diasDelMes } from './lib/certificacion.js';
 import { ventanasDelPeriodo, estadoVentana, evaluarVentana, factorAjuste } from './lib/ajuste.js';
 import { rangoDias, parse, sumarDias, esHabil } from './lib/fechas.js';
 import { supabase, DOMINIOS } from './lib/supabase.js';
@@ -9,7 +9,7 @@ import { armarProforma, comprimirTramos, expandirTramos } from './proforma/armar
 import { renderProforma } from './proforma/plantilla.js';
 import * as db from './datos.js';
 import { completarEscenario } from './lib/resultado.js';
-import { periodosContrato, calcularPnl } from './lib/pnl.js';
+import { periodosContrato, periodosSueldos, calcularPnl, costoCapitanesMes } from './lib/pnl.js';
 
 const MENSUALES = CONTRATO_VMOS.items.filter((i) => i.tipo === 'mensual');
 const DOW = ['D', 'L', 'M', 'M', 'J', 'V', 'S'];
@@ -140,6 +140,7 @@ function Certificacion() {
       {vista === 'facturaciones' && <Facturaciones />}
       {vista === 'formula' && <main><SeguimientoFormula /></main>}
       {vista === 'resultado' && <Resultado />}
+      {vista === 'sueldos' && <Sueldos />}
     </>
   );
 }
@@ -154,20 +155,26 @@ function useContrato() {
     Promise.all([
       db.leerEscenarios(), db.listarFacturacionesPorMes(), db.leerPersonal(), db.leerReferencia('cargas_sociales'),
       db.leerReferencia('inicios'), db.leerAjustes(), db.leerDolarPorMes(CONTRATO_VMOS.inicioServicio.slice(0, 7)),
+      db.leerSueldosMes(),
     ])
-      .then(([escenarios, facturaciones, personal, cargas, inicios, ajustes, dolar]) => {
+      .then(([escenarios, facturaciones, personal, cargas, inicios, ajustes, dolar, sueldos]) => {
         const esperado = escenarios.esperado && completarEscenario(escenarios.esperado.supuestos);
         const arranque = escenarios.arranque && completarEscenario(escenarios.arranque.supuestos);
         if (!esperado || !arranque || !cargas) throw new Error('Faltan los supuestos o las cargas sociales en la base de datos');
         const periodos = periodosContrato(esperado.mesesContrato);
         const fx = (mes) => dolar.porMes[mes] ?? dolar.ultimo ?? esperado.fx;
+        const sueldosReales = Object.fromEntries(Object.entries(sueldos).map(([mes, porPersona]) => [mes,
+          Object.fromEntries(Object.entries(porPersona).map(([id, f]) => [id, db.totalSueldo(f)]))]));
+        const mesesSueldos = periodosSueldos(esperado.mesesContrato).map((m) => ({
+          ...m, reales: sueldos[m.mes] ?? {}, costo: costoCapitanesMes(m, personal, cargas, fx(m.mes), sueldosReales[m.mes]),
+        }));
         const filas = calcularPnl({
-          periodos, facturaciones, personal, cargas, fx,
+          periodos, facturaciones, personal, cargas, fx, sueldosReales,
           escenarios: { arranque, esperado },
           ajustes: ajustes.filter((a) => a.estado === 'aprobado'),
           inicioSeguros: inicios?.seguros ?? null,
         });
-        setDatos({ periodos, facturaciones, personal, filas, inicios: inicios ?? {}, arranque });
+        setDatos({ periodos, facturaciones, personal, filas, mesesSueldos, inicios: inicios ?? {}, arranque });
       })
       .catch((e) => setError(e.message));
   }, [version]);
@@ -1217,15 +1224,14 @@ const MODULOS = [
   { id: 'facturaciones', nombre: 'Facturación', desc: 'Un mes por cajita: certificación, proforma, factura y cobro' },
   { id: 'formula', nombre: 'Fórmula de ajuste', desc: 'Índices, base y disparadores del Anexo II' },
   { id: 'resultado', nombre: 'Resultado', desc: 'P&L mes a mes: real y proyectado' },
-  { id: 'sueldos', nombre: 'Sueldos', desc: 'Capitanes Sr y Jr: sueldo, cargas, OSDE, bono' },
-  { id: 'sergio', nombre: 'Sergio', desc: 'Superintendente técnico: fijo y participación' },
-  { id: 'operacion', nombre: 'Operación', desc: 'Vuelos, remises, hoteles, viáticos, EPP' },
+  { id: 'sueldos', nombre: 'Sueldos', desc: 'Capitanes en relación de dependencia, mes a mes' },
+  { id: 'operacion', nombre: 'Operación', desc: 'Sergio (superintendente, factura), vuelos, remises, hoteles, viáticos, EPP' },
   { id: 'vehiculo', nombre: 'Vehículo', desc: 'Camioneta, pólizas, services' },
   { id: 'vivienda', nombre: 'Vivienda', desc: 'Alquiler del departamento' },
   { id: 'administracion', nombre: 'Administración', desc: 'Estructura TM: Xubio, Office, celulares' },
   { id: 'seguros', nombre: 'Seguros', desc: 'RC del contrato y pólizas 1a–1c' },
 ];
-const ACTIVOS = ['facturaciones', 'formula', 'resultado'];
+const ACTIVOS = ['facturaciones', 'formula', 'resultado', 'sueldos'];
 
 function Inicio({ onAbrir }) {
   return (
@@ -1260,8 +1266,7 @@ function Inicio({ onAbrir }) {
 const COLUMNAS_PNL = [
   ['ingreso', 'Ingresos'],
   ['capitanes', 'Capitanes'],
-  ['operacion', 'Operación'],
-  ['sergioFijo', 'Sergio fijo'],
+  ['operacionTotal', 'Operación (incl. Sergio)'],
   ['impuestos', 'Imprev. e impuestos'],
   ['bruto', 'Resultado bruto'],
   ['participacion', 'Particip. Sergio'],
@@ -1351,5 +1356,209 @@ function Resultado() {
         </p>
       </div>
     </main>
+  );
+}
+
+// ─── Sueldos: un mes por cajita, desde octubre 2026 ──────────────────────────
+// Cada mes muestra el costo proyectado de cada capitán (proporcional a los días activos) y permite
+// cargar lo real liquidado y la fecha de pago. Lo real reemplaza a lo proyectado en el P&L.
+
+const ESTADO_SUELDO = {
+  pagado: { color: 'verde', texto: 'Liquidado y pagado' },
+  liquidado: { color: 'amarilla', texto: 'Liquidado, falta pagar' },
+  proyeccion: { color: 'gris', texto: 'Proyección' },
+};
+const estadoSueldo = (mes) => {
+  const filas = Object.values(mes.reales);
+  if (!filas.length) return 'proyeccion';
+  const activos = mes.costo.porPersona.length;
+  return filas.filter((f) => f.pagado_el).length >= Math.max(activos, filas.length) ? 'pagado' : 'liquidado';
+};
+
+function Sueldos() {
+  const { datos, error, recargar } = useContrato();
+  const [abierto, setAbierto] = useState(null);
+  const hoy = hoyIso();
+
+  if (!datos) return <main>{error ? <p className="aviso error">Error: {error}</p> : 'Cargando…'}</main>;
+  const meses = datos.mesesSueldos;
+
+  if (abierto) {
+    const mes = meses.find((m) => m.mes === abierto);
+    return (
+      <main>
+        <button type="button" className="terciario volver-meses" onClick={() => { setAbierto(null); recargar(); }}>← Volver a los meses</button>
+        <SueldoMes mes={mes} onCambio={recargar} />
+      </main>
+    );
+  }
+
+  return (
+    <main>
+      <section className="encabezado">
+        <div>
+          <h1>Sueldos.</h1>
+          <div className="filete" />
+          <p className="aviso">Capitanes en relación de dependencia, un mes por cajita. Octubre 2026 es proporcional del 26 al 31.</p>
+        </div>
+        <div className="leyenda">
+          {Object.values(ESTADO_SUELDO).map((e) => <span key={e.color}><span className={`bolita ${e.color}`} /> {e.texto}</span>)}
+        </div>
+      </section>
+
+      <Capitanes personal={datos.personal} onCambio={recargar} />
+
+      <div className="meses">
+        {meses.map((m) => {
+          const disponible = m.desde <= hoy;
+          const e = ESTADO_SUELDO[estadoSueldo(m)];
+          return (
+            <button key={m.mes} type="button" className={`mes-card ${Object.keys(m.reales).length ? 'cargada' : ''}`} disabled={!disponible}
+              title={disponible ? '' : `Se habilita el ${fecha(m.desde)}`} onClick={() => setAbierto(m.mes)}>
+              <span className="mes-fila"><span className="mes-n mono">{String(m.n).padStart(2, '0')}</span><span className={`bolita ${e.color}`} title={e.texto} /></span>
+              <span className="mes-nombre">{m.nombre}</span>
+              <span className="mes-fechas mono">{fecha(m.desde)} – {fecha(m.hasta)}</span>
+              <span className={`mes-monto mono ${m.costo.conReales ? '' : 'proyectado'}`}>{millones(m.costo.total)}</span>
+            </button>
+          );
+        })}
+      </div>
+    </main>
+  );
+}
+
+// Capitanes y vacantes: fechas de ingreso y egreso (sin fecha de ingreso no entran en la proyección).
+function Capitanes({ personal, onCambio }) {
+  const [error, setError] = useState('');
+  async function cambiar(id, campo, valor) {
+    setError('');
+    try {
+      await db.actualizarPersona(id, { [campo]: valor || null });
+      onCambio();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+  return (
+    <section className="tarjeta capitanes">
+      <div className="overline">Capitanes</div>
+      <div className="tabla-scroll">
+        <table className="tabla-ajuste">
+          <thead><tr><th>Nombre</th><th>Rol</th><th>Ingreso</th><th>Egreso</th><th>Notas</th></tr></thead>
+          <tbody>
+            {personal.map((p) => (
+              <tr key={p.id} className={p.inicio ? '' : 'sin-fecha'}>
+                <td>{p.nombre}</td>
+                <td>{p.rol === 'senior' ? 'Senior' : 'Junior'}</td>
+                <td><input type="date" value={p.inicio ?? ''} onChange={(e) => cambiar(p.id, 'inicio', e.target.value)} /></td>
+                <td><input type="date" value={p.fin ?? ''} min={p.inicio ?? undefined} onChange={(e) => cambiar(p.id, 'fin', e.target.value)} /></td>
+                <td className="ayuda">{p.inicio ? p.notas : 'Sin fecha de ingreso: no entra en la proyección.'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {error && <p className="aviso error">Error: {error}</p>}
+    </section>
+  );
+}
+
+const CAMPOS_REAL = [
+  ['bruto_ars', 'Bruto liquidado'],
+  ['cargas_ars', 'Cargas (F.931)'],
+  ['osde_ars', 'OSDE'],
+  ['bono_ars', 'Bono'],
+  ['otros_ars', 'Otros'],
+];
+
+function SueldoMes({ mes, onCambio }) {
+  const [reales, setReales] = useState(mes.reales);
+  const [error, setError] = useState('');
+  const pendientes = useRef({});
+  const total = (f) => CAMPOS_REAL.reduce((s, [k]) => s + (Number(f?.[k]) || 0), 0);
+
+  function cambiar(personaId, campo, valor) {
+    const fila = { ...(reales[personaId] ?? {}), [campo]: valor };
+    setReales((r) => ({ ...r, [personaId]: fila }));
+    clearTimeout(pendientes.current[personaId]);
+    pendientes.current[personaId] = setTimeout(() => {
+      const valores = Object.fromEntries(CAMPOS_REAL.map(([k]) => [k, Number(fila[k]) || 0]));
+      db.guardarSueldo(mes.mes, personaId, { ...valores, pagado_el: fila.pagado_el || null })
+        .then(onCambio).catch((e) => setError(e.message));
+    }, 800);
+  }
+
+  async function volverAProyectado(personaId) {
+    clearTimeout(pendientes.current[personaId]);
+    try {
+      await db.borrarSueldo(mes.mes, personaId);
+      setReales((r) => { const x = { ...r }; delete x[personaId]; return x; });
+      onCambio();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  const proyectadoTotal = mes.costo.porPersona.reduce((s, x) => s + x.proyectado, 0);
+  const realTotal = mes.costo.porPersona.reduce((s, x) => s + (reales[x.persona.id] ? total(reales[x.persona.id]) : x.proyectado), 0);
+
+  return (
+    <>
+      <section className="encabezado">
+        <div>
+          <h1 className="capitalizar">{mes.nombre}.</h1>
+          <div className="periodo mono">{fecha(mes.desde)} – {fecha(mes.hasta)}</div>
+          <div className="filete" />
+        </div>
+      </section>
+      <p className="aviso">
+        Proyectado = costo para la empresa según la oferta firmada (bruto, licencia, SAC, cargas, OSDE y bono), proporcional a
+        los días del mes. Cargá lo real de la liquidación: reemplaza a lo proyectado en el P&L.
+      </p>
+      <div className="tabla-scroll">
+        <table className="tabla-sueldos">
+          <thead>
+            <tr>
+              <th>Capitán</th><th className="n">Días</th><th className="n">Proyectado</th>
+              {CAMPOS_REAL.map(([k, n]) => <th key={k} className="n">{n}</th>)}
+              <th className="n">Total real</th><th>Pagado el</th><th />
+            </tr>
+          </thead>
+          <tbody>
+            {mes.costo.porPersona.map((x) => {
+              const f = reales[x.persona.id];
+              return (
+                <tr key={x.persona.id}>
+                  <td>{x.persona.nombre}<span className="ayuda"> · {x.persona.rol === 'senior' ? 'Sr' : 'Jr'}</span></td>
+                  <td className="n mono">{Math.round(x.meq * diasDelMes(mes.desde))}</td>
+                  <td className="n mono con-origen" title={`Remuneración ${pesos(x.detalle.remuneracion)} · cargas ${pesos(x.detalle.cargas)} · OSDE ${pesos(x.detalle.osde)} (mes completo, antes del bono)`}>
+                    {pesos(x.proyectado)}
+                  </td>
+                  {CAMPOS_REAL.map(([k]) => (
+                    <td key={k} className="n">
+                      <input type="number" step="any" min="0" className="mono" value={f?.[k] || ''} placeholder="—"
+                        onChange={(e) => cambiar(x.persona.id, k, e.target.value)} />
+                    </td>
+                  ))}
+                  <td className="n mono fuerte">{f ? pesos(total(f)) : '—'}</td>
+                  <td><input type="date" value={f?.pagado_el ?? ''} onChange={(e) => cambiar(x.persona.id, 'pagado_el', e.target.value)} /></td>
+                  <td>{f && <button type="button" className="terciario chico" onClick={() => volverAProyectado(x.persona.id)}>Usar proyectado</button>}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+          <tfoot>
+            <tr>
+              <td colSpan={2}>Total del mes</td>
+              <td className="n mono">{pesos(proyectadoTotal)}</td>
+              <td colSpan={CAMPOS_REAL.length} />
+              <td className="n mono">{pesos(realTotal)}</td>
+              <td colSpan={2} className="ayuda">{Object.keys(reales).length ? 'real donde está cargado' : 'todo proyectado'}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+      {error && <p className="aviso error">Error: {error}</p>}
+    </>
   );
 }
