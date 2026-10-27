@@ -153,6 +153,7 @@ function Certificacion() {
       {vista === 'administracion' && <Administracion />}
       {vista === 'vehiculo' && <Vehiculo />}
       {vista === 'upselling' && <Upselling />}
+      {vista === 'xubio' && <Xubio />}
     </>
   );
 }
@@ -1312,9 +1313,10 @@ const MODULOS = [
   { id: 'vehiculo', nombre: 'Vehículo', desc: 'Camioneta: amortización, póliza, services, patente, combustible' },
   { id: 'administracion', nombre: 'Administración', desc: 'Sistemas de sueldos y contable, telefonía, licencias, honorarios' },
   { id: 'upselling', nombre: 'Up selling', desc: 'Trabajos que se cobran aparte (ingreso y costo) y reembolsables' },
+  { id: 'xubio', nombre: 'Xubio', desc: 'Conexión con Xubio: diagnóstico de OC, facturas de compra y pagos' },
   { id: 'seguros', nombre: 'Seguros', desc: 'RC y E&O: prima anual en cuotas, facturadas con los ítems 1a–1c' },
 ];
-const ACTIVOS = ['facturaciones', 'formula', 'resultado', 'sueldos', 'desempeno', 'operacion', 'vehiculo', 'administracion', 'seguros', 'upselling'];
+const ACTIVOS = ['facturaciones', 'formula', 'resultado', 'sueldos', 'desempeno', 'operacion', 'vehiculo', 'administracion', 'seguros', 'upselling', 'xubio'];
 
 function Inicio({ onAbrir }) {
   return (
@@ -2828,6 +2830,118 @@ function Upselling() {
           </table>
         </div>
       </section>
+    </main>
+  );
+}
+
+// ─── Xubio ───────────────────────────────────────────────────────────────────
+
+const PASOS_XUBIO = [
+  ['conexion', 'Conexión (token)'],
+  ['empresa', 'Empresa'],
+  ['centrosDeCosto', 'Centros de costo'],
+  ['productosDeCompra', 'Productos de compra'],
+  ['ordenesDeCompra', 'Órdenes de compra'],
+  ['facturasDeCompra', 'Facturas de compra'],
+  ['pagos', 'Pagos'],
+];
+
+// Diagnóstico de la conexión: qué devuelve Xubio, para decidir cómo se traen las compras.
+function Xubio() {
+  const hoy = hoyIso();
+  const [desde, setDesde] = useState(sumarDias(hoy, -90));
+  const [hasta, setHasta] = useState(hoy);
+  const [res, setRes] = useState(null);
+  const [cargando, setCargando] = useState(false);
+  const [error, setError] = useState('');
+
+  async function probar() {
+    setCargando(true);
+    setError('');
+    setRes(null);
+    try {
+      setRes(await db.diagnosticoXubio(desde, hasta));
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setCargando(false);
+    }
+  }
+
+  const detalle = (k, p) => {
+    if (!p.ok) return <span className="error">{p.error}</span>;
+    if (k === 'empresa') return `${p.nombre ?? '—'}${p.cuit ? ` · CUIT ${p.cuit}` : ''}`;
+    if (p.lista) return `${p.lista.length}: ${p.lista.slice(0, 30).join(' · ')}${p.lista.length > 30 ? ' …' : ''}`;
+    if ('cantidad' in p) return `${p.cantidad} en total${p.muestra?.length ? ` · muestra de ${p.muestra.length} abajo` : ''}`;
+    return 'OK';
+  };
+
+  return (
+    <main>
+      <section className="encabezado">
+        <div>
+          <h1>Xubio.</h1>
+          <div className="filete" />
+          <p className="aviso">
+            Diagnóstico de la conexión: prueba el acceso y trae una muestra de órdenes de compra, facturas de compra y pagos
+            tal como los devuelve Xubio. No guarda nada en la app.
+          </p>
+        </div>
+      </section>
+
+      <section className="tarjeta">
+        <div className="campos">
+          <label>Desde<input type="date" value={desde} onChange={(e) => setDesde(e.target.value)} /></label>
+          <label>Hasta<input type="date" value={hasta} onChange={(e) => setHasta(e.target.value)} /></label>
+          <button type="button" onClick={probar} disabled={cargando}>{cargando ? 'Consultando Xubio…' : 'Probar conexión'}</button>
+        </div>
+        {error && <p className="aviso error">Error: {error}</p>}
+      </section>
+
+      {res && (
+        <>
+          <div className="tabla-scroll">
+            <table className="tabla-ajuste">
+              <thead><tr><th>Paso</th><th>Estado</th><th>Resultado</th><th className="n">Tiempo</th></tr></thead>
+              <tbody>
+                {PASOS_XUBIO.filter(([k]) => res[k]).map(([k, n]) => (
+                  <tr key={k}>
+                    <td>{n}</td>
+                    <td><span className={`bolita ${res[k].ok ? 'verde' : 'roja'}`} /> {res[k].ok ? 'OK' : 'Error'}</td>
+                    <td>{detalle(k, res[k])}</td>
+                    <td className="n mono">{res[k].ms} ms</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {['ordenesDeCompra', 'facturasDeCompra'].map((k) => res[k]?.muestra?.length > 0 && (
+            <section key={k} className="tarjeta">
+              <div className="overline">{k === 'ordenesDeCompra' ? 'Órdenes de compra (últimas)' : 'Facturas de compra (últimas del rango)'}</div>
+              {res[k].muestra.map((c, i) => (
+                <div key={i} className="muestra-xubio">
+                  <p><strong>{c.tipo ?? ''} {c.numero ?? '(sin número)'}</strong> · {c.fecha ?? '—'} · {c.proveedor ?? '—'} · total <span className="mono">{c.total ?? '—'}</span> {c.moneda ?? ''}{c.descripcion ? ` · ${c.descripcion}` : ''}</p>
+                  <div className="tabla-scroll">
+                    <table className="tabla-ajuste">
+                      <thead><tr><th>Producto</th><th>Descripción</th><th>Centro de costo</th><th className="n">Importe</th></tr></thead>
+                      <tbody>
+                        {c.renglones.length === 0 && <tr><td colSpan={4} className="aviso">Xubio no devolvió renglones.</td></tr>}
+                        {c.renglones.map((r, j) => (
+                          <tr key={j}><td>{r.producto ?? '—'}</td><td>{r.descripcion ?? '—'}</td><td>{r.centroDeCosto ?? '—'}</td><td className="n mono">{r.importe ?? '—'}</td></tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ))}
+            </section>
+          ))}
+          <details className="tarjeta">
+            <summary>Respuesta completa (para revisar campos)</summary>
+            <pre className="mono json-xubio">{JSON.stringify(res, null, 2)}</pre>
+          </details>
+        </>
+      )}
     </main>
   );
 }

@@ -401,3 +401,12 @@ export async function guardarUpselling(linea) {
 export async function borrarUpselling(id) {
   ok(await supabase.from('upselling').delete().eq('id', id));
 }
+
+// ─── Xubio ───────────────────────────────────────────────────────────────────
+
+// Prueba la conexión con Xubio y trae una muestra de OC, facturas de compra y pagos.
+export async function diagnosticoXubio(desde, hasta) {
+  const { data, error } = await supabase.functions.invoke('xubio', { body: { accion: 'diagnostico', desde, hasta } });
+  if (error) throw new Error(data?.error ?? error.message);
+  return data;
+}

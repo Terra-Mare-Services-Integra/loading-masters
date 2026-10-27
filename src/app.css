@@ -306,3 +306,8 @@ td.con-origen input{ cursor:text; }
 /* Presupuesto por año: título, campo y total alineados a la derecha de cada columna */
 .presupuesto-admin td:not(:first-child){ text-align:right; }
 .presupuesto-admin td input.corto{ width:100%; min-width:90px; text-align:right; box-sizing:border-box; }
+
+/* Xubio */
+.bolita.roja{ background:#c0392b; }
+.muestra-xubio{ margin-top:16px; }
+.json-xubio{ max-height:420px; overflow:auto; font-size:12px; white-space:pre; }
