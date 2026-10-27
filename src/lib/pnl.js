@@ -190,8 +190,9 @@ export function calcularPnl({ periodos, facturaciones, personal, cargas, escenar
       };
       const m = mesesEquivalentes(tramo);
       const g = gastos[mes];
-      operacion += g?.compras > 0 ? g.compras : esc.operacionUsd * fx(mes) * m;
-      sergioFijo += g?.sergio > 0 ? g.sergio : esc.sgFijoUsd * factor * fx(mes) * m;
+      // En los meses ya facturados solo cuenta lo cargado: la proyección se borra.
+      operacion += g?.compras > 0 || real ? g?.compras ?? 0 : esc.operacionUsd * fx(mes) * m;
+      sergioFijo += g?.sergio > 0 || real ? g?.sergio ?? 0 : esc.sgFijoUsd * factor * fx(mes) * m;
       reembolsables += g?.reembolsables ?? 0;
       operacionReal ||= Boolean(g?.compras > 0 || g?.sergio > 0);
       // Administración: lo cargado del mes o el presupuesto mensual.

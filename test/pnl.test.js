@@ -61,10 +61,12 @@ test('P&L: proyección, facturación real y capitanes que entran después', () =
   assert.equal(feb.estado, 'facturado');
   assert.equal(feb.ingreso, 1_000_000);
   cerca(feb.capitanes, 1_707_800, 'el segundo capitán todavía no entró');
-  cerca(feb.operacion, 10 * 1_100, 'operación en pesos');
-  cerca(feb.sergioFijo, 20 * 0.5 * 1_100, 'fijo de Sergio escalado');
+  cerca(feb.operacion, 0, 'facturado sin gastos cargados: sin proyección');
+  cerca(feb.sergioFijo, 0, 'facturado sin honorarios cargados');
+  cerca(ene.operacion, 10 * 1_100, 'operación proyectada en pesos');
+  cerca(ene.sergioFijo, 20 * 0.5 * 1_100, 'fijo de Sergio escalado');
   cerca(feb.impuestos, 0, 'facturado: sin imprevistos ni impuestos proyectados');
-  cerca(feb.bruto, 1_000_000 - 1_707_800 - 11_000 - 11_000, 'resultado bruto');
+  cerca(feb.bruto, 1_000_000 - 1_707_800, 'resultado bruto');
   cerca(feb.participacion, 0.1 * feb.bruto - 0.1 * 30 * 0.5 * 1_100, 'participación');
   assert.ok(ene.ingreso > 0, 'enero se proyecta con el precio del contrato');
   cerca(totalesPnl(filas).generacion, ene.generacion + feb.generacion, 'totales');

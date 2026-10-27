@@ -210,7 +210,10 @@ function useContrato() {
             gastos: gastos.filter((g) => g.mes === m.mes),
             resumen: resumenGastosMes[m.mes],
             sgFijoUsd: esc.sgFijoUsd * factor * meq,
-            proyectado: { operacion: esc.operacionUsd * fx(m.mes) * meq, sergio: esc.sgFijoUsd * factor * fx(m.mes) * meq },
+            // Mes ya facturado: no hay proyección, cuenta solo lo cargado.
+            proyectado: fila?.real
+              ? { operacion: 0, sergio: 0 }
+              : { operacion: esc.operacionUsd * fx(m.mes) * meq, sergio: esc.sgFijoUsd * factor * fx(m.mes) * meq },
           };
         });
         setDatos({ periodos, facturaciones, personal, filas, mesesSueldos, mesesOperacion, mesesAdministracion, presupuestoAdmin, personasGastos: personasGastos ?? [], dolarUltimo: dolar.ultimo, inicios: inicios ?? {}, seguros: seguros ?? { cuotas: 10, polizas: [] }, arranque });
@@ -2078,7 +2081,7 @@ function GastosMes({ mes, datos, onCambio }) {
           <div><span className="etiqueta">Reembolsables</span> <span className="mono fuerte">{pesos(r.reembolsables)}</span> <span className="ayuda">a facturar {pesos(r.reembolsables * 1.1)} (con fee)</span></div>
         </div>
       </section>
-      <p className="aviso">Montos sin IVA. Si el mes tiene compras cargadas, reemplazan a la operación proyectada en el P&L; lo mismo con los honorarios de Sergio.</p>
+      <p className="aviso">Montos sin IVA. Si el mes tiene compras cargadas, reemplazan a la operación proyectada en el P&L; lo mismo con los honorarios de Sergio. Una vez facturado el mes, la proyección se borra y cuenta solo lo cargado.</p>
 
       {rubrosConGastos.length > 0 && (
         <div className="tabla-scroll">
