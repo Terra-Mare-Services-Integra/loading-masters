@@ -180,3 +180,20 @@ export async function sincronizarAhora() {
   if (error) throw error;
   return data;
 }
+
+// Series para un rango de meses de aplicación: IPC de n-2 y dólar del primer día hábil de cada mes.
+export async function leerSeriesRango(meses, mesesIpc) {
+  const desde = `${meses[0]}-01`;
+  const [y, m] = meses.at(-1).split('-').map(Number);
+  const hasta = new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 10);
+  const [ipc, usd] = await Promise.all([
+    supabase.from('serie_ipc').select('mes, valor, fuente').in('mes', mesesIpc),
+    supabase.from('serie_usd').select('fecha, valor').gte('fecha', desde).lt('fecha', hasta).order('fecha'),
+  ]);
+  const primerDia = {};
+  for (const f of ok(usd)) primerDia[f.fecha.slice(0, 7)] ??= { valor: Number(f.valor), fecha: f.fecha };
+  return {
+    ipc: Object.fromEntries(ok(ipc).map((f) => [f.mes, { valor: Number(f.valor), mes: f.mes, fuente: f.fuente }])),
+    usd: primerDia,
+  };
+}

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import logoUrl from '../assets/isologo-horizontal-azul.png';
 import { CONTRATO_VMOS } from './lib/contrato.js';
 import { periodoDeCierre } from './lib/certificacion.js';
-import { ventanasDelPeriodo, estadoVentana, evaluarVentana } from './lib/ajuste.js';
+import { ventanasDelPeriodo, estadoVentana, evaluarVentana, factorAjuste } from './lib/ajuste.js';
 import { rangoDias, parse, sumarDias, esHabil } from './lib/fechas.js';
 import { supabase, DOMINIOS } from './lib/supabase.js';
 import { armarProforma, comprimirTramos, expandirTramos } from './proforma/armar.js';
@@ -148,6 +148,20 @@ function Ingreso() {
 }
 
 function Certificacion() {
+  const [vista, setVista] = useState('facturaciones');
+  return (
+    <>
+      <nav className="vistas">
+        {[['facturaciones', 'Facturaciones'], ['formula', 'Fórmula de ajuste']].map(([id, n]) => (
+          <button key={id} type="button" className={`vista ${vista === id ? 'activa' : ''}`} onClick={() => setVista(id)}>{n}</button>
+        ))}
+      </nav>
+      {vista === 'formula' ? <main><SeguimientoFormula /></main> : <Facturaciones />}
+    </>
+  );
+}
+
+function Facturaciones() {
   const [lista, setLista] = useState(null);
   const [seleccion, setSeleccion] = useState(null);
   const [nueva, setNueva] = useState(null);
@@ -918,3 +932,137 @@ function VentanaAjuste({ ventana, aprobados, pedido, onCambioAjustes }) {
     </div>
   );
 }
+
+// ─── Fórmula de ajuste: seguimiento mensual (como el Excel "Formula de ajuste") ──
+// Una fila por mes de aplicación desde el comienzo de cómputo: básico (a mano), IPC n-2 y dólar del
+// primer día hábil (automáticos), aporte de cada componente contra la base vigente e índice resultante.
+
+function SeguimientoFormula() {
+  const hoy = hoyIso();
+  const meses = useMemo(() => {
+    const lista = [];
+    const ultimo = mesMenos(hoy.slice(0, 7), -1); // hasta el mes próximo
+    for (let m = CONTRATO_VMOS.inicioComputo; m <= ultimo; m = mesMenos(m, -1)) lista.push(m);
+    return lista;
+  }, [hoy]);
+  const [datos, setDatos] = useState(null);
+  const [error, setError] = useState('');
+  const pendientes = useRef({});
+
+  async function cargar() {
+    try {
+      const [indices, series, ajustes] = await Promise.all([
+        db.leerIndices(meses),
+        db.leerSeriesRango(meses, meses.map((m) => mesMenos(m, 2))),
+        db.leerAjustes(),
+      ]);
+      setDatos({ indices, series, ajustes });
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+  useEffect(() => { cargar(); }, [meses]);
+
+  if (!datos) return <section className="seguimiento">{error ? <p className="aviso error">Error: {error}</p> : 'Cargando…'}</section>;
+
+  const aprobados = datos.ajustes.filter((a) => a.estado === 'aprobado');
+  const h = CONTRATO_VMOS.ajuste.historia;
+  const factorHistorico = factorAjuste(CONTRATO_VMOS.ajuste.base, h.indices);
+
+  function setMo(mes, valor) {
+    const actual = datos.indices[mes] ?? { mo: null, ipc: null, usd: null, paritaria: false };
+    const nuevo = { ...actual, mo: valor };
+    setDatos((d) => ({ ...d, indices: { ...d.indices, [mes]: nuevo } }));
+    clearTimeout(pendientes.current[mes]);
+    pendientes.current[mes] = setTimeout(() => {
+      const s = datos.series;
+      db.guardarIndices(mes, { ...nuevo, ipc: s.ipc[mesMenos(mes, 2)]?.valor ?? nuevo.ipc, usd: s.usd[mes]?.valor ?? nuevo.usd })
+        .catch((e) => setError(e.message));
+    }, 800);
+  }
+
+  return (
+    <section className="seguimiento">
+      <h1>Fórmula de ajuste.</h1>
+      <div className="filete" />
+      <p className="aviso">
+        Índice = 70 % × Básico/Básico base + 20 % × IPC(-2)/IPC base + 10 % × Dólar/Dólar base. Cada mes se compara contra
+        la base vigente (la del contrato, oct-26, hasta que VMOS apruebe un ajuste). El IPC y el dólar se completan solos;
+        el básico de Capitán de Ultramar se carga a mano.
+      </p>
+
+      <div className="tabla-scroll">
+        <table className="tabla-seguimiento">
+          <thead>
+            <tr>
+              <th>Mes</th><th className="n">Básico</th><th className="n">IPC (-2)</th><th className="n">Dólar</th>
+              <th className="n">MO 70 %</th><th className="n">IPC 20 %</th><th className="n">Dólar 10 %</th>
+              <th className="n">Índice</th><th className="n">Var. IPC</th><th className="n">Var. dólar</th>
+              <th className="n">Meses</th><th>¿Se puede pedir?</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr className="historia">
+              <td>{nombreMes(h.mes)} <span className="ayuda">precios originales</span></td>
+              <td className="n mono">{dec(h.indices.mo, 0)}</td>
+              <td className="n mono">{dec(h.indices.ipc, 1)}</td>
+              <td className="n mono">{dec(h.indices.usd, 1)}</td>
+              <td colSpan={8} className="ayuda">Paso a oct-26: índice {dec(factorHistorico * 100, 1)} % → precios de la oferta</td>
+            </tr>
+            {meses.map((mes) => {
+              const guardado = datos.indices[mes] ?? {};
+              const ipc = datos.series.ipc[mesMenos(mes, 2)];
+              const usd = datos.series.usd[mes];
+              const pedido = datos.ajustes.find((a) => a.mes === mes);
+              const valores = pedido ? pedido.indices : { mo: guardado.mo, ipc: ipc?.valor ?? guardado.ipc, usd: usd?.valor ?? guardado.usd };
+              const ev = evaluarVentana({
+                mes, indices: valores, paritaria: !!guardado.paritaria,
+                aprobados: aprobados.filter((a) => a.mes !== mes),
+              });
+              const esBase = mes === ev.base.mes;
+              const b = ev.base.indices;
+              const aporte = (k, w) => (valores[k] ? `${dec((valores[k] / b[k]) * w * 100, 1)} %` : '—');
+              return (
+                <tr key={mes} className={esBase ? 'base' : ''}>
+                  <td>{nombreMes(mes)}{esBase && <span className="chip">Base</span>}</td>
+                  <td className="n">
+                    {esBase && ev.base.origen === 'contrato'
+                      ? <span className="mono">{dec(b.mo, 0)}</span>
+                      : <input type="number" step="any" min="0" className="mono" value={guardado.mo ?? ''} disabled={!!pedido}
+                          placeholder="cargar" onChange={(e) => setMo(mes, e.target.value === '' ? null : Number(e.target.value))} />}
+                  </td>
+                  <td className="n mono" title={ipc ? `${ipc.fuente}, ${nombreMes(ipc.mes)}` : 'todavía no publicado'}>
+                    {esBase && ev.base.origen === 'contrato' ? dec(b.ipc, 1) : ipc ? dec(ipc.valor, 1) : <span className="ayuda">{nombreMes(mesMenos(mes, 2))}: pendiente</span>}
+                  </td>
+                  <td className="n mono" title={usd ? `BNA vía BCRA, ${fecha(usd.fecha)}` : 'todavía no disponible'}>
+                    {esBase && ev.base.origen === 'contrato' ? dec(b.usd, 1) : usd ? dec(usd.valor, 1) : <span className="ayuda">pendiente</span>}
+                  </td>
+                  <td className="n mono">{esBase ? '70,0 %' : aporte('mo', 0.7)}</td>
+                  <td className="n mono">{esBase ? '20,0 %' : aporte('ipc', 0.2)}</td>
+                  <td className="n mono">{esBase ? '10,0 %' : aporte('usd', 0.1)}</td>
+                  <td className="n mono fuerte">{esBase ? '100,0 %' : ev.completo ? `${dec(ev.factor * 100, 1)} %` : '—'}</td>
+                  <td className="n mono">{!esBase && ev.variaciones ? pctSigno(ev.variaciones.ipc) : !esBase && valores.ipc ? pctSigno(valores.ipc / b.ipc - 1) : '—'}</td>
+                  <td className="n mono">{!esBase && ev.variaciones ? pctSigno(ev.variaciones.usd) : !esBase && valores.usd ? pctSigno(valores.usd / b.usd - 1) : '—'}</td>
+                  <td className="n mono">{ev.mesesDesdeBase}</td>
+                  <td>
+                    {pedido ? <span className={`chip pedido-${pedido.estado}`}>{ESTADO_PEDIDO[pedido.estado]}</span>
+                      : esBase ? '—'
+                      : ev.motivos.length ? <span className="chip estado-abierta">Sí · {ev.motivos.map((m) => MOTIVOS[m]).join(', ')}</span>
+                      : 'No'}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <p className="aviso">
+        La variación del IPC y del dólar se calcula aunque falte el básico. El pedido y la respuesta de VMOS se registran en la
+        facturación que incluye los días 1 a 10 de ese mes.
+      </p>
+      {error && <p className="aviso error">Error: {error}</p>}
+    </section>
+  );
+}
+
+const MOTIVOS = { ipc: 'IPC > 15 %', usd: 'dólar > 15 %', paritaria: 'acuerdo gremial', plazo: '6 meses' };

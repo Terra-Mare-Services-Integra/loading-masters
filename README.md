@@ -76,7 +76,12 @@ Proyecto propio `loading-masters` (ref `sehlulimgrxdterocaml`, sa-east-1, org In
   datos.gob.ar) y `serie_usd` (dólar BNA divisa vendedor, API de estadísticas cambiarias del BCRA):
   las descarga la Edge Function `sincronizar-indices`, que pg_cron corre a las 9 y a las 18 h
   (hora argentina); `sincronizaciones` registra cada corrida. La app completa sola IPC1 (mes n-2) y
-  USD1 (primer día hábil del mes); MO1 (FENA) sigue siendo manual.
+  USD1 (primer día hábil del mes); MO1 (FENA) sigue siendo manual. El IPC sale primero del CSV
+  del INDEC (`serie_ipc_divisiones.csv`, Nivel General **Nacional**, disponible el día del informe) y,
+  de respaldo, de la API de datos.gob.ar, que se actualiza unos días después.
+- Pestaña **Fórmula de ajuste**: el seguimiento mes a mes como el Excel "Formula de ajuste" (una fila
+  por mes desde oct-26 con básico, IPC(-2), dólar, aporte de cada componente, índice, variaciones y
+  si se puede pedir), más el paso de referencia mar-26 → oct-26.
 - `ajustes`: pedidos de revisión por ventana (solicitado / aprobado / rechazado), con los índices,
   la base, el factor y los precios resultantes congelados al pedir.
 - `proformas`: cada emisión guarda la foto exacta de lo enviado; no se editan ni se borran, y se

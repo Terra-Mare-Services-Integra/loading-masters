@@ -156,3 +156,21 @@ label.check input{ min-height:0; width:16px; height:16px; }
 .ajustes-aplicados{ font-size:12px; color:var(--text-muted); border-top:1px solid var(--border-subtle); padding-top:8px; }
 .sync{ margin:8px 0 0; align-items:center; }
 .sync .aviso{ flex:1 1 400px; }
+
+/* Navegación principal y seguimiento de la fórmula */
+.vistas{ display:flex; gap:0; padding:0 32px; border-bottom:1px solid var(--border-subtle); }
+.vista{ background:transparent; color:var(--text-muted); border:0; border-bottom:4px solid transparent; font-weight:600; padding:12px 16px; }
+.vista:hover{ background:var(--tm-blue-050); color:var(--tm-ink); }
+.vista.activa{ color:var(--tm-ink); border-bottom-color:var(--tm-blue); background:transparent; }
+.seguimiento .aviso{ max-width:100ch; }
+.tabla-scroll{ overflow-x:auto; margin-top:16px; border:1px solid var(--border-subtle); }
+.tabla-seguimiento{ width:100%; border-collapse:collapse; font-size:13px; }
+.tabla-seguimiento th{ text-align:left; font-size:12px; font-weight:600; padding:8px; border-bottom:1px solid var(--tm-blue-light); white-space:nowrap; background:var(--tm-white); }
+.tabla-seguimiento td{ padding:6px 8px; border-bottom:1px solid var(--border-subtle); white-space:nowrap; }
+.tabla-seguimiento .n{ text-align:right; }
+.tabla-seguimiento input{ width:130px; text-align:right; min-height:30px; padding:4px 6px; }
+.tabla-seguimiento tr.base td{ background:var(--tm-blue-050); }
+.tabla-seguimiento tr.historia td{ color:var(--text-muted); background:var(--tm-surface); }
+.tabla-seguimiento .chip{ margin-left:8px; }
+.tabla-seguimiento td:last-child .chip{ margin-left:0; }
+@media (max-width: 900px){ .vistas{ padding:0 16px; } }

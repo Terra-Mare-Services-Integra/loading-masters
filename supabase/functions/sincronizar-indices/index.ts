@@ -18,14 +18,43 @@ async function json(url: string) {
   return r.json();
 }
 
-async function sincronizarIpc() {
+// IPC Nivel General Nacional. Fuente principal: el CSV que publica el INDEC (sale el mismo día del
+// informe); respaldo: la API de series de datos.gob.ar, que se actualiza unos días después.
+async function ipcIndec() {
+  const r = await fetch('https://www.indec.gob.ar/ftp/cuadros/economia/serie_ipc_divisiones.csv');
+  if (!r.ok) throw new Error(`INDEC respondió ${r.status}`);
+  const texto = new TextDecoder('latin1').decode(await r.arrayBuffer());
+  // Codigo;Descripcion;Clasificador;Periodo;Indice_IPC;v_m_IPC;v_i_a_IPC;Region
+  return texto.split(/\r?\n/)
+    .map((l) => l.split(';'))
+    .filter((c) => c[0] === '0' && c[7]?.trim() === 'Nacional' && c[3] >= DESDE.slice(0, 7).replace('-', ''))
+    .map((c) => ({ mes: `${c[3].slice(0, 4)}-${c[3].slice(4, 6)}`, valor: Number(c[4].replace(',', '.')) }));
+}
+
+async function ipcDatosGob() {
   const d = await json(`https://apis.datos.gob.ar/series/api/series/?ids=${SERIE_IPC}&start_date=${DESDE}&limit=1000&format=json`);
-  const filas = (d.data as [string, number | null][])
+  return (d.data as [string, number | null][])
     .filter(([, v]) => v !== null)
-    .map(([f, v]) => ({ mes: f.slice(0, 7), valor: v, actualizado_at: new Date().toISOString() }));
+    .map(([f, v]) => ({ mes: f.slice(0, 7), valor: v as number }));
+}
+
+async function sincronizarIpc() {
+  const porMes = new Map<string, { valor: number; fuente: string }>();
+  const errores: string[] = [];
+  // Primero la API y después el INDEC, así el INDEC pisa (y agrega el último mes).
+  for (const [fuente, fn] of [['datos.gob.ar', ipcDatosGob], ['INDEC', ipcIndec]] as const) {
+    try {
+      for (const { mes, valor } of await fn()) if (valor > 0) porMes.set(mes, { valor, fuente });
+    } catch (e) {
+      errores.push(`${fuente}: ${(e as Error).message}`);
+    }
+  }
+  if (!porMes.size) throw new Error(errores.join(' · '));
+  const filas = [...porMes].sort(([a], [b]) => a.localeCompare(b))
+    .map(([mes, { valor, fuente }]) => ({ mes, valor, fuente, actualizado_at: new Date().toISOString() }));
   const { error } = await db.from('serie_ipc').upsert(filas);
   if (error) throw error;
-  return { meses: filas.length, ultimo: filas.at(-1) };
+  return { meses: filas.length, ultimo: filas.at(-1), ...(errores.length ? { avisos: errores } : {}) };
 }
 
 async function sincronizarUsd() {
