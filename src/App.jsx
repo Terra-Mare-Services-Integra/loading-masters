@@ -72,11 +72,11 @@ export default function App() {
         <img src={logoUrl} alt="TERRAMARE" />
         <div className="barra-titulo">
           <div className="overline">Loading Masters</div>
-          <div>Certificación de servicios · {CONTRATO_VMOS.cliente}</div>
+          <div className="barra-sub">Certificación de servicios · {CONTRATO_VMOS.cliente}</div>
         </div>
         {sesion && (
           <div className="usuario">
-            <span>{sesion.user.email}</span>
+            <span className="usuario-mail" title={sesion.user.email}>{sesion.user.email}</span>
             <button className="terciario" onClick={() => supabase.auth.signOut()}>Salir</button>
           </div>
         )}
@@ -855,16 +855,16 @@ function Historial({ proformas, onCambio }) {
     <section className="historial">
       <div className="overline">Proformas emitidas</div>
       <div className="tabla-scroll">
-      <table>
+      <table className="tabla-tarjetas">
         <thead><tr><th>Emitida</th><th>Número</th><th>Por</th><th className="n">Total</th><th>Estado</th><th /></tr></thead>
         <tbody>
           {visibles.map((p) => (
             <tr key={p.id} className={`proforma-${p.estado}`}>
-              <td className="mono">{hora.format(new Date(p.emitida_at))}</td>
-              <td className="mono">{p.numero}</td>
-              <td>{p.emitida_por}</td>
-              <td className="n mono">{pesos(Number(p.total))}</td>
-              <td>
+              <td data-label="Emitida" className="mono">{hora.format(new Date(p.emitida_at))}</td>
+              <td data-label="Número" className="mono">{p.numero}</td>
+              <td data-label="Por">{p.emitida_por}</td>
+              <td data-label="Total" className="n mono">{pesos(Number(p.total))}</td>
+              <td data-label="Estado">
                 <span className={`chip proforma-chip-${p.estado}`}>{ESTADO_PROFORMA[p.estado]}</span>
                 <span className="ayuda">
                   {p.estado === 'enviada' && ` el ${fecha(p.enviada_el)}`}
@@ -872,7 +872,7 @@ function Historial({ proformas, onCambio }) {
                   {p.estado === 'anulada' && ` · ${p.motivo_anulacion}`}
                 </span>
               </td>
-              <td className="n acciones-proforma">
+              <td data-label="" className="n acciones-proforma">
                 {p.estado === 'emitida' && enviando === p.id ? (
                   <>
                     <input type="date" value={fechaEnvio} max={hoyIso()} onChange={(e) => setFechaEnvio(e.target.value)} />
@@ -1106,6 +1106,7 @@ function VentanaAjuste({ ventana, aprobados, pedido, onCambioAjustes }) {
       </div>
 
       <div className="columnas">
+        <div className="tabla-scroll">
         <table className="tabla-ajuste">
           <thead><tr><th>Componente</th><th className="n">Peso</th><th className="n">Base</th><th className="n">Actual</th><th className="n">Variación</th></tr></thead>
           <tbody>
@@ -1122,7 +1123,9 @@ function VentanaAjuste({ ventana, aprobados, pedido, onCambioAjustes }) {
             ))}
           </tbody>
         </table>
+        </div>
 
+        <div className="tabla-scroll">
         <table className="tabla-ajuste">
           <thead><tr><th>Disparador</th><th className="n">Valor</th><th className="n">¿Se cumple?</th></tr></thead>
           <tbody>
@@ -1135,6 +1138,7 @@ function VentanaAjuste({ ventana, aprobados, pedido, onCambioAjustes }) {
             ))}
           </tbody>
         </table>
+        </div>
       </div>
 
       {ev.completo ? (
@@ -2232,7 +2236,7 @@ function GastosMes({ mes, datos, onCambio }) {
       </section>
 
       <div className="tabla-scroll">
-        <table className="tabla-sueldos gastos">
+        <table className="tabla-sueldos gastos tabla-tarjetas">
           <thead>
             <tr><th>Fecha</th><th>Tipo y rubro</th><th>Descripción</th><th>Proveedor · factura</th><th className="n">Monto</th><th className="n">ARS sin IVA</th><th>Pagado el</th><th>Facturado</th><th /></tr>
           </thead>
@@ -2240,18 +2244,18 @@ function GastosMes({ mes, datos, onCambio }) {
             {gastos.length === 0 && <tr><td colSpan={9} className="aviso">Todavía no hay gastos cargados en este mes.</td></tr>}
             {gastos.map((g) => (
               <tr key={g.id} className={g.reembolsable ? 'reembolsable' : ''}>
-                <td className="mono">{fecha(g.fecha)}</td>
-                <td>{etiquetaGasto(g)}</td>
-                <td>{g.origen === 'xubio' && <span className="etiqueta-xubio">Xubio</span>}{g.descripcion}{nombrePersona(g) && <span className="ayuda"> · {nombrePersona(g)}</span>}</td>
-                <td>{g.proveedor}{g.factura_numero && <span className="ayuda"> · {g.factura_numero}</span>}</td>
-                <td className="n mono">{g.moneda === 'USD' ? `USD ${dec(g.monto, 2)}` : pesos(g.monto)}{g.moneda === 'USD' && <div className="ayuda">TC {dec(g.tipo_cambio, 2)}</div>}</td>
-                <td className="n mono fuerte">{pesos(montoArs(g))}</td>
-                <td>
+                <td data-label="Fecha" className="mono">{fecha(g.fecha)}</td>
+                <td data-label="Tipo y rubro">{etiquetaGasto(g)}</td>
+                <td data-label="Descripción">{g.origen === 'xubio' && <span className="etiqueta-xubio">Xubio</span>}{g.descripcion}{nombrePersona(g) && <span className="ayuda"> · {nombrePersona(g)}</span>}</td>
+                <td data-label="Proveedor · factura">{g.proveedor}{g.factura_numero && <span className="ayuda"> · {g.factura_numero}</span>}</td>
+                <td data-label="Monto" className="n mono">{g.moneda === 'USD' ? `USD ${dec(g.monto, 2)}` : pesos(g.monto)}{g.moneda === 'USD' && <div className="ayuda">TC {dec(g.tipo_cambio, 2)}</div>}</td>
+                <td data-label="ARS sin IVA" className="n mono fuerte">{pesos(montoArs(g))}</td>
+                <td data-label="Pagado el">
                   <input type="date" value={(g.origen === 'xubio' ? g.pagoManual : g.pagado_el) ?? ''} onChange={(e) => actualizar(g, { pagado_el: e.target.value || null })} />
                   {g.origen === 'xubio' && !g.pagoManual && <div className="ayuda">{g.pagado_el ? 'Pagada' : 'Vence'} el {fecha(g.vence)} (automático)</div>}
                 </td>
-                <td className="ayuda">{g.reembolsable ? (g.facturado_en ? `En ${g.facturado_en}` : 'Pendiente') : '—'}</td>
-                <td>{g.origen !== 'xubio' && <button type="button" className="terciario chico" onClick={() => borrar(g)}>Borrar</button>}</td>
+                <td data-label="Facturado" className="ayuda">{g.reembolsable ? (g.facturado_en ? `En ${g.facturado_en}` : 'Pendiente') : '—'}</td>
+                <td data-label="">{g.origen !== 'xubio' && <button type="button" className="terciario chico" onClick={() => borrar(g)}>Borrar</button>}</td>
               </tr>
             ))}
           </tbody>
@@ -2736,7 +2740,7 @@ function GastosFijosMes({ area, mes, anterior, datos, onCambio }) {
       </section>
 
       <div className="tabla-scroll">
-        <table className="tabla-sueldos gastos">
+        <table className="tabla-sueldos gastos tabla-tarjetas">
           <thead>
             <tr><th>Fecha</th><th>Rubro</th><th>Descripción</th><th>Proveedor · factura</th><th className="n">Monto</th><th className="n">ARS sin IVA</th><th>Pagado el</th><th /></tr>
           </thead>
@@ -2744,17 +2748,17 @@ function GastosFijosMes({ area, mes, anterior, datos, onCambio }) {
             {gastos.length === 0 && <tr><td colSpan={8} className="aviso">Todavía no hay gastos cargados en este mes.</td></tr>}
             {gastos.map((g) => (
               <tr key={g.id}>
-                <td className="mono">{fecha(g.fecha)}</td>
-                <td>{nombreRubroDe(area, g.rubro)}</td>
-                <td>{g.origen === 'xubio' && <span className="etiqueta-xubio">Xubio</span>}{g.descripcion}</td>
-                <td>{g.proveedor}{g.factura_numero && <span className="ayuda"> · {g.factura_numero}</span>}</td>
-                <td className="n mono">{g.moneda === 'USD' ? `USD ${dec(g.monto, 2)}` : pesos(g.monto)}{g.moneda === 'USD' && <div className="ayuda">TC {dec(g.tipo_cambio, 2)}</div>}</td>
-                <td className="n mono fuerte">{pesos(montoArs(g))}</td>
-                <td>
+                <td data-label="Fecha" className="mono">{fecha(g.fecha)}</td>
+                <td data-label="Rubro">{nombreRubroDe(area, g.rubro)}</td>
+                <td data-label="Descripción">{g.origen === 'xubio' && <span className="etiqueta-xubio">Xubio</span>}{g.descripcion}</td>
+                <td data-label="Proveedor · factura">{g.proveedor}{g.factura_numero && <span className="ayuda"> · {g.factura_numero}</span>}</td>
+                <td data-label="Monto" className="n mono">{g.moneda === 'USD' ? `USD ${dec(g.monto, 2)}` : pesos(g.monto)}{g.moneda === 'USD' && <div className="ayuda">TC {dec(g.tipo_cambio, 2)}</div>}</td>
+                <td data-label="ARS sin IVA" className="n mono fuerte">{pesos(montoArs(g))}</td>
+                <td data-label="Pagado el">
                   <input type="date" value={(g.origen === 'xubio' ? g.pagoManual : g.pagado_el) ?? ''} onChange={(e) => actualizar(g, { pagado_el: e.target.value || null })} />
                   {g.origen === 'xubio' && !g.pagoManual && <div className="ayuda">{g.pagado_el ? 'Pagada' : 'Vence'} el {fecha(g.vence)} (automático)</div>}
                 </td>
-                <td>{g.origen !== 'xubio' && <button type="button" className="terciario chico" onClick={() => borrar(g)}>Borrar</button>}</td>
+                <td data-label="">{g.origen !== 'xubio' && <button type="button" className="terciario chico" onClick={() => borrar(g)}>Borrar</button>}</td>
               </tr>
             ))}
           </tbody>
@@ -2848,18 +2852,18 @@ function Upselling() {
       </section>
 
       <div className="tabla-scroll">
-        <table className="tabla-sueldos gastos">
+        <table className="tabla-sueldos gastos tabla-tarjetas">
           <thead><tr><th>Mes</th><th>Descripción</th><th className="n">Ingreso</th><th className="n">Costo</th><th className="n">Neto ($)</th><th /></tr></thead>
           <tbody>
             {datos.upselling.length === 0 && <tr><td colSpan={6} className="aviso">Todavía no hay trabajos de up selling cargados.</td></tr>}
             {datos.upselling.map((u) => (
               <tr key={u.id}>
-                <td className="capitalizar">{nombreMes(u.mes)}</td>
-                <td>{u.descripcion}</td>
-                <td className="n mono">{monto(u, u.ingreso)}{u.moneda === 'USD' && <div className="ayuda">TC {dec(u.tipo_cambio)}</div>}</td>
-                <td className="n mono">{monto(u, u.costo)}</td>
-                <td className="n mono fuerte">{pesos(ingresoArs(u) - costoArs(u))}</td>
-                <td><button type="button" className="terciario chico" onClick={() => borrar(u)}>Borrar</button></td>
+                <td data-label="Mes" className="capitalizar">{nombreMes(u.mes)}</td>
+                <td data-label="Descripción">{u.descripcion}</td>
+                <td data-label="Ingreso" className="n mono">{monto(u, u.ingreso)}{u.moneda === 'USD' && <div className="ayuda">TC {dec(u.tipo_cambio)}</div>}</td>
+                <td data-label="Costo" className="n mono">{monto(u, u.costo)}</td>
+                <td data-label="Neto ($)" className="n mono fuerte">{pesos(ingresoArs(u) - costoArs(u))}</td>
+                <td data-label=""><button type="button" className="terciario chico" onClick={() => borrar(u)}>Borrar</button></td>
               </tr>
             ))}
           </tbody>
@@ -3181,17 +3185,17 @@ function ComprasXubio() {
         <summary>Renglones importados ({compras.length})</summary>
         <p className="ayuda">Para mandar un renglón puntual a otro módulo o rubro, cambialo acá; queda fijo aunque cambie la clasificación del producto.</p>
         <div className="tabla-scroll">
-          <table className="tabla-sueldos gastos">
+          <table className="tabla-sueldos gastos tabla-tarjetas">
             <thead><tr><th>Fecha</th><th>Factura</th><th>Proveedor</th><th>Producto · descripción</th><th className="n">Sin IVA</th><th>Destino</th></tr></thead>
             <tbody>
               {[...compras].reverse().map((c) => (
                 <tr key={c.id}>
-                  <td className="mono">{fecha(c.fecha)}</td>
-                  <td className="mono">{c.numero}</td>
-                  <td>{c.proveedor}</td>
-                  <td>{c.producto}{c.descripcion && <span className="ayuda"> · {c.descripcion}</span>}</td>
-                  <td className="n mono">{pesos(c.importe_ars)}{c.cotizacion && <div className="ayuda">{c.moneda} · TC {dec(Number(c.cotizacion))}</div>}</td>
-                  <td>
+                  <td data-label="Fecha" className="mono">{fecha(c.fecha)}</td>
+                  <td data-label="Factura" className="mono">{c.numero}</td>
+                  <td data-label="Proveedor">{c.proveedor}</td>
+                  <td data-label="Producto · descripción">{c.producto}{c.descripcion && <span className="ayuda"> · {c.descripcion}</span>}</td>
+                  <td data-label="Sin IVA" className="n mono">{pesos(c.importe_ars)}{c.cotizacion && <div className="ayuda">{c.moneda} · TC {dec(Number(c.cotizacion))}</div>}</td>
+                  <td data-label="Destino">
                     <SelectorDestino area={c.area} rubro={c.rubro} onCambio={(area, rubro) => clasificarRenglon(c.id, area, rubro)} />
                     {c.manual && <span className="ayuda"> (a mano)</span>}
                   </td>
@@ -3262,15 +3266,17 @@ function GraficoMensual({ meses, series, formato, atenuar = [], umbral, alto = 2
   const anchoBarra = Math.max(Math.min((paso * 0.7) / Math.max(barras.length, 1) - 2, 22), 2);
   const cx = (i) => x0 + paso * (i + 0.5);
   const cadaN = Math.ceil(meses.length / Math.max(Math.floor(ancho / 64), 2));
+  const elegir = (e) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    const i = Math.floor((((e.clientX - r.left) / r.width) * W - x0) / paso);
+    setHover(i >= 0 && i < meses.length ? i : null);
+  };
 
   return (
     <div className="viz-grafico" ref={ref} onMouseLeave={() => setHover(null)}>
       <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label={series.map((s) => s.nombre).join(', ')}
-        onMouseMove={(e) => {
-          const r = e.currentTarget.getBoundingClientRect();
-          const i = Math.floor((((e.clientX - r.left) / r.width) * W - x0) / paso);
-          setHover(i >= 0 && i < meses.length ? i : null);
-        }}>
+        // Puntero: mouse al pasar y dedo al tocar (en pantallas táctiles no hay hover).
+        onPointerMove={(e) => elegir(e)} onPointerDown={(e) => elegir(e)}>
         {marcas.map((v) => (
           <g key={v}>
             <line x1={x0} x2={W - m.r} y1={y(v)} y2={y(v)} className={v === 0 ? 'viz-base' : 'viz-grilla'} />
@@ -3442,15 +3448,18 @@ function Dashboards() {
               { nombre: 'A vencer', valor: cob.aVencer, color: 'var(--estado-bien)' },
               ...cob.tramos.map((tr, i) => ({ nombre: `Vencido ${tr.nombre}`, valor: tr.monto, color: ['var(--estado-atencion)', 'var(--estado-serio)', 'var(--estado-critico)'][i] })),
             ]} />
+            <div className="tabla-scroll">
             <table className="tabla-ajuste viz-tabla">
               <tbody>
                 <tr><td>A vencer</td><td className="n mono">{mill(cob.aVencer)}</td></tr>
                 {cob.tramos.map((tr) => <tr key={tr.id}><td>Vencido {tr.nombre}</td><td className="n mono">{mill(tr.monto)}{tr.cantidad ? ` · ${tr.cantidad}` : ''}</td></tr>)}
               </tbody>
             </table>
+            </div>
           </div>
           <div>
             <div className="viz-subtitulo">Próximos cobros esperados</div>
+            <div className="tabla-scroll">
             <table className="tabla-ajuste viz-tabla">
               <thead><tr><th>Mes</th><th>Factura aprox.</th><th>Cobro aprox.</th><th className="n">Con IVA</th></tr></thead>
               <tbody>
@@ -3462,6 +3471,7 @@ function Dashboards() {
                 ))}
               </tbody>
             </table>
+            </div>
           </div>
         </div>
         <div className="viz-subtitulo">Facturas emitidas</div>

@@ -198,7 +198,7 @@ label.check input{ min-height:0; width:16px; height:16px; }
 td.con-origen input{ cursor:text; }
 
 /* Inicio en cajitas */
-.cajitas{ display:grid; grid-template-columns:repeat(auto-fill, minmax(240px, 1fr)); gap:16px; margin-top:32px; }
+.cajitas{ display:grid; grid-template-columns:repeat(auto-fill, minmax(min(240px, 100%), 1fr)); gap:16px; margin-top:32px; }
 .cajita{ display:flex; flex-direction:column; align-items:flex-start; gap:6px; text-align:left; min-height:140px;
   background:var(--tm-white); color:var(--tm-ink); border:1px solid var(--border-subtle); border-top:4px solid var(--tm-blue);
   padding:20px; font-weight:400; }
@@ -322,10 +322,10 @@ td.con-origen input{ cursor:text; }
   --estado-bien:#0ca30c; --estado-atencion:#fab219; --estado-serio:#ec835a; --estado-critico:#d03b3b;
   --viz-tinta:#101820; --viz-grilla:#E2E7EE; --viz-base:#A5B5CC; --viz-muted:#5B6672; }
 .viz .tarjeta{ margin-top:20px; }
-.viz-fila{ display:grid; grid-template-columns:repeat(auto-fit, minmax(340px, 1fr)); gap:20px; }
+.viz-fila{ display:grid; grid-template-columns:repeat(auto-fit, minmax(min(340px, 100%), 1fr)); gap:20px; }
 .viz-fila > .tarjeta{ margin-top:20px; }
 .viz-subtitulo{ font-size:13px; font-weight:600; margin:16px 0 8px; }
-.viz-kpis{ display:grid; grid-template-columns:repeat(auto-fit, minmax(170px, 1fr)); gap:12px; margin-top:12px; }
+.viz-kpis{ display:grid; grid-template-columns:repeat(auto-fit, minmax(min(170px, 100%), 1fr)); gap:12px; margin-top:12px; }
 .viz-kpi{ background:#fff; border:1px solid var(--border-subtle); border-top:3px solid var(--tm-blue-light); padding:12px 14px; }
 .viz-kpi.critico{ border-top-color:var(--estado-critico); }
 .viz-kpi.bien{ border-top-color:var(--estado-bien); }
@@ -333,7 +333,7 @@ td.con-origen input{ cursor:text; }
 .viz-kpi-valor{ font-size:26px; line-height:1.2; margin-top:4px; }
 .viz-kpi-detalle{ font-size:12px; color:var(--text-muted); margin-top:2px; }
 .viz-grafico{ position:relative; margin-top:8px; }
-.viz-grafico svg{ width:100%; display:block; }
+.viz-grafico svg{ width:100%; display:block; touch-action:pan-y; }
 .viz-eje{ font-size:11px; fill:var(--viz-muted); font-variant-numeric:tabular-nums; }
 .viz-grilla{ stroke:var(--viz-grilla); stroke-width:1; }
 .viz-base{ stroke:var(--viz-base); stroke-width:1; }
@@ -363,3 +363,102 @@ td.con-origen input{ cursor:text; }
 .viz-rubro-valor{ text-align:right; }
 .xubio-proforma{ display:flex; flex-wrap:wrap; gap:6px; align-items:center; justify-content:flex-end; margin-top:6px; }
 .ancho-mail{ width:100%; min-width:260px; }
+
+/* ─── Responsive (celular y tablet) ───────────────────────────────────────────
+   Las tablas anchas scrollean dentro de su recuadro (.tabla-scroll), nunca la página. */
+label, .campos > *, .fila > *{ min-width:0; }
+select{ max-width:100%; }
+.usuario-mail{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+.barra-titulo{ min-width:0; }
+.usuario{ min-width:0; }
+/* Sombra a los costados cuando la tabla tiene más columnas que el ancho visible. */
+.tabla-scroll{
+  -webkit-overflow-scrolling:touch;
+  background:
+    linear-gradient(to right, #fff 30%, rgba(255,255,255,0)) left / 32px 100% no-repeat local,
+    linear-gradient(to left, #fff 30%, rgba(255,255,255,0)) right / 32px 100% no-repeat local,
+    radial-gradient(farthest-side at 0 50%, rgba(16,24,32,.22), transparent) left / 10px 100% no-repeat scroll,
+    radial-gradient(farthest-side at 100% 50%, rgba(16,24,32,.22), transparent) right / 10px 100% no-repeat scroll;
+}
+.tabla-scroll > table{ background:transparent; }
+/* Resultado: la columna del mes queda fija al scrollear. */
+.tabla-pnl thead th:first-child, .tabla-pnl tbody td:first-child{ position:sticky; left:0; background:#fff; z-index:1; }
+.tabla-pnl tfoot td:first-child{ position:sticky; left:0; z-index:1; }
+
+/* Pantallas táctiles: botones de al menos 40 px y campos de 16 px (el iPhone no hace zoom al tocarlos). */
+@media (pointer: coarse){
+  button{ min-height:40px; }
+  button.chico{ min-height:36px; padding:6px 12px; }
+  .segmentado button{ min-height:40px; }
+  input, select, textarea{ font-size:16px; min-height:40px; }
+  .celda{ min-height:40px; width:52px; font-size:16px; }
+  .grilla thead th{ min-width:52px; }
+  .chip{ min-height:36px; padding:4px 12px; }
+  label.check input{ width:20px; height:20px; }
+}
+
+/* Tablet y abajo */
+@media (max-width: 1023px){
+  main{ padding:20px 20px 40px; }
+}
+
+/* Celular */
+@media (max-width: 599px){
+  main{ padding:12px max(12px, env(safe-area-inset-right)) 32px max(12px, env(safe-area-inset-left)); }
+  .barra{ gap:12px; padding:8px 12px; border-top-width:6px; }
+  .barra img{ height:30px; }
+  .barra-sub{ display:none; }
+  .barra .overline{ font-size:11px; letter-spacing:.12em; }
+  .usuario{ gap:4px; font-size:12px; }
+  .usuario-mail{ max-width:28vw; }
+  .barra-volver{ padding:6px 12px; gap:8px; flex-wrap:wrap; }
+  .barra-volver-titulo{ font-size:12px; }
+  h1{ font-size:26px; }
+  .encabezado{ margin-top:16px; gap:12px; }
+  .tarjeta{ padding:14px; }
+  .cajitas{ gap:12px; margin-top:20px; }
+  .cajita{ min-height:0; padding:14px; }
+  .cajita-nombre{ font-size:20px; }
+  .meses{ grid-template-columns:repeat(2, minmax(0, 1fr)); gap:8px; }
+  .mes-card{ min-height:0; padding:10px; }
+  .mes-nombre{ font-size:17px; }
+  /* Formularios: un campo por renglón, a todo el ancho. */
+  .campos > label, .fila > label{ flex:1 1 100%; }
+  .campos > label input, .campos > label select, .fila > label input, .fila > label select{ width:100%; }
+  .campos > label input.corto{ width:100%; }
+  .campos > button, .fila > button{ flex:1 1 auto; }
+  /* Filtros (años, moneda): a todo el ancho y en varias líneas si no entran. */
+  .filtros{ width:100%; }
+  .segmentado{ display:flex; flex-wrap:wrap; width:100%; }
+  .segmentado button{ flex:1 1 auto; }
+  .resumen-eval{ align-items:flex-start; text-align:left; }
+  .leyenda{ align-self:flex-start; }
+  .estado{ min-width:0; }
+  .calendario{ grid-template-columns:1fr; }
+  .grilla .fijo{ min-width:150px; max-width:150px; padding:6px 8px; }
+  .grilla .desc{ max-width:100px; }
+  .acciones-proforma, .xubio-proforma{ justify-content:flex-start; }
+  .viz-kpi-valor{ font-size:22px; }
+  .viz-kpis{ grid-template-columns:repeat(2, minmax(0, 1fr)); gap:8px; }
+  .viz-kpi{ padding:10px; }
+  .viz-rubro{ grid-template-columns:minmax(0, 1fr) 80px; }
+  .viz-rubro-barra{ grid-column:1 / -1; grid-row:2; }
+  .ancho-mail{ min-width:0; }
+  .cajitas.analisis .cajita{ min-height:0; }
+  /* Listas con acciones (proformas, gastos, up selling, compras de Xubio): cada fila es una tarjeta,
+     con el nombre de cada dato a la izquierda y todas las acciones a la vista. */
+  .tabla-tarjetas thead{ display:none; }
+  .tabla-tarjetas, .tabla-tarjetas tbody, .tabla-tarjetas tfoot{ display:block; width:100%; }
+  .tabla-tarjetas tr{ display:block; padding:8px 10px; border-bottom:1px solid var(--tm-blue-light); background:#fff; }
+  .tabla-tarjetas td{ display:flex; justify-content:space-between; align-items:center; gap:12px; padding:4px 0; border:0;
+    white-space:normal; text-align:right; }
+  .tabla-tarjetas td[data-label]::before{ content:attr(data-label); flex:0 0 auto; max-width:45%; text-align:left;
+    font-family:var(--font-body); font-size:12px; font-weight:600; color:var(--text-muted); }
+  .tabla-tarjetas td[data-label=""]::before{ content:none; }
+  .tabla-tarjetas td[data-label=""]{ justify-content:flex-end; }
+  .tabla-tarjetas td[colspan]{ display:block; text-align:left; }
+  .tabla-tarjetas tfoot tr{ background:var(--tm-surface); }
+  .tabla-tarjetas tfoot td{ display:flex; justify-content:space-between; }
+  .tabla-tarjetas .acciones-proforma, .tabla-tarjetas .xubio-proforma{ justify-content:flex-end; }
+  .tabla-scroll:has(> .tabla-tarjetas){ background:none; border:0; }
+}
