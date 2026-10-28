@@ -456,7 +456,7 @@ async function accionXubio(accion, extra = {}) {
 }
 
 export const opcionesVentasXubio = () => accionXubio('opciones-ventas');
-export const altaVentasXubio = (items, confirmar = false) => accionXubio('alta-ventas', { items, confirmar });
+export const altaVentasXubio = (items, confirmar = false, modeloProductoId = null) => accionXubio('alta-ventas', { items, confirmar, modeloProductoId });
 export const enviarPresupuestoXubio = (proformaId) => accionXubio('enviar-presupuesto', { proformaId });
 export const pdfPresupuestoXubio = (proformaId) => accionXubio('pdf-presupuesto', { proformaId });
 export const estadoPresupuestoXubio = (proformaId, estado) => accionXubio('estado-presupuesto', { proformaId, estado });

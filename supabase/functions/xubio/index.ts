@@ -383,7 +383,7 @@ async function plantilla(tk: string, ruta: string, ids: unknown[], ok: (x: any) 
   return null;
 }
 
-async function altaVentas(items: { codigo: string; descripcion: string }[], confirmar: boolean, email: string | null) {
+async function altaVentas(items: { codigo: string; descripcion: string }[], confirmar: boolean, email: string | null, modeloProductoId?: number) {
   const { data } = await db.from('referencias').select('valor').eq('clave', 'xubio_ventas').maybeSingle();
   const cfg = data?.valor ?? {};
   const alta = cfg.alta ?? {};
@@ -423,7 +423,14 @@ async function altaVentas(items: { codigo: string; descripcion: string }[], conf
   const lp = lista(productos);
   // Xubio no tiene GET de un producto de venta suelto: el modelo sale del listado, que trae todos los campos.
   const iva21 = (p: any) => Number(p.tasaIva?.porcentaje) === 21 || /21/.test(`${p.tasaIva?.nombre ?? ''} ${p.tasaIva?.codigo ?? ''}`);
-  const modeloProducto = [...lp].reverse().find((p: any) => iva21(p) && p.activo !== 0 && p.activo !== false) ?? null;
+  // Se puede elegir el modelo; si no, se propone uno con IVA 21 % y cuenta de ventas o servicios.
+  const activos = lp.filter((p: any) => p.activo !== 0 && p.activo !== false);
+  const ivaTexto = (p: any) => (p.tasaIva?.porcentaje != null ? `${p.tasaIva.porcentaje} %` : nombre(p.tasaIva));
+  const modelos = activos.map((p: any) => ({ id: p.productoid ?? p.id, nombre: p.nombre, iva: ivaTexto(p), cuenta: nombre(p.cuentaContable) }));
+  const modeloProducto = (modeloProductoId
+    ? activos.find((p: any) => String(p.productoid ?? p.id) === String(modeloProductoId))
+    : [...activos].reverse().find((p: any) => iva21(p) && /venta|servicio/i.test(nombre(p.cuentaContable) ?? ''))
+      ?? [...activos].reverse().find(iva21)) ?? null;
   const ivas = [...new Set(lp.map((p: any) => JSON.stringify(p.tasaIva ?? null)))].slice(0, 5).join(' | ');
   const prods: any[] = items.map((it) => {
     const codigo = codigoProducto(it.codigo);
@@ -440,8 +447,10 @@ async function altaVentas(items: { codigo: string; descripcion: string }[], conf
 
   const resumen = {
     cliente: { estado: cliente.estado, nombre: cliente.nombre ?? alta.razonSocial, cuit: alta.cuit, modelo: cliente.modelo ?? null, categoriaFiscal: nombre(cliente.cuerpo?.categoriaFiscal), cuentaVenta: nombre(cliente.cuerpo?.cuentaVenta_id) },
-    productos: prods.map((p) => ({ item: p.item, estado: p.estado, codigo: p.codigo, nombre: p.nombre ?? p.cuerpo?.nombre, iva: p.cuerpo?.tasaIva?.porcentaje ?? null, cuenta: nombre(p.cuerpo?.cuentaContable) })),
+    productos: prods.map((p) => ({ item: p.item, estado: p.estado, codigo: p.codigo, nombre: p.nombre ?? p.cuerpo?.nombre, iva: p.cuerpo ? ivaTexto(p.cuerpo) : null, cuenta: nombre(p.cuerpo?.cuentaContable) })),
     modeloProducto: modeloProducto?.nombre ?? null,
+    modeloProductoId: modeloProducto ? modeloProducto.productoid ?? modeloProducto.id : null,
+    modelos,
   };
   if (!confirmar) {
     await db.from('referencias').upsert({ clave: 'xubio_alta_previa', valor: { ...resumen, at: new Date().toISOString(), por: email }, descripcion: 'Última vista previa del alta de VMOS en Xubio' });
@@ -487,7 +496,7 @@ Deno.serve(async (req) => {
     if (error || !autorizado) return responder({ error: 'No autorizado' }, 403);
 
     const { data: { user } } = await usuario.auth.getUser();
-    const { accion = 'diagnostico', desde, hasta, proformaId, estado, items, confirmar } = cuerpo;
+    const { accion = 'diagnostico', desde, hasta, proformaId, estado, items, confirmar, modeloProductoId } = cuerpo;
     const hoy = new Date();
     const hace90 = new Date(hoy.getTime() - 90 * 864e5);
     if (accion === 'diagnostico') return responder(await diagnostico(desde ?? fechaIso(hace90), hasta ?? fechaIso(hoy)));
@@ -496,7 +505,7 @@ Deno.serve(async (req) => {
     if (accion === 'enviar-presupuesto') return responder(await enviarPresupuesto(proformaId, user?.email ?? null));
     if (accion === 'pdf-presupuesto') return responder(await pdfPresupuesto(proformaId));
     if (accion === 'estado-presupuesto') return responder(await estadoPresupuesto(proformaId, estado));
-    if (accion === 'alta-ventas') return responder(await altaVentas(items, confirmar === true, user?.email ?? null));
+    if (accion === 'alta-ventas') return responder(await altaVentas(items, confirmar === true, user?.email ?? null, modeloProductoId));
     return responder({ error: `Acción desconocida: ${accion}` }, 400);
   } catch (e) {
     return responder({ error: (e as Error).message }, 500);

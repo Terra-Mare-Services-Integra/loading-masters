@@ -3708,11 +3708,11 @@ function AltaVentasXubio({ onListo }) {
     }
   }
 
-  const ver = () => hacer('ver', async () => setPrevia(await db.altaVentasXubio(items)));
+  const ver = (modelo = previa?.modeloProductoId ?? null) => hacer('ver', async () => setPrevia(await db.altaVentasXubio(items, false, modelo)));
   const crear = () => hacer('crear', async () => {
     const n = (previa.cliente.estado === 'a crear' ? 1 : 0) + previa.productos.filter((p) => p.estado === 'a crear').length;
     if (n && !confirm(`Se van a crear ${n} registros en Xubio (cliente y productos de venta). ¿Seguir?`)) return;
-    const r = await db.altaVentasXubio(items, true);
+    const r = await db.altaVentasXubio(items, true, previa.modeloProductoId);
     setPrevia(null);
     setAviso(`Listo: ${r.cliente.nombre} y ${r.productos.length} productos quedaron elegidos.`);
     await onListo();
@@ -3723,6 +3723,14 @@ function AltaVentasXubio({ onListo }) {
     <div className="alta-xubio">
       <div className="overline">Alta de VMOS en Xubio</div>
       <p className="ayuda">Crea el cliente y un producto de venta por ítem del contrato, copiando la categoría fiscal, las cuentas y el IVA de un cliente y un producto que ya existen en Xubio. Primero se ve qué se va a crear.</p>
+      {previa?.modelos?.length > 0 && previa.productos.some((p) => p.estado === 'a crear') && (
+        <label className="ancho modelo-alta">
+          <span>Copiar IVA y cuenta contable de los productos de</span>
+          <select value={previa.modeloProductoId ?? ''} disabled={!!ocupado} onChange={(e) => ver(e.target.value)}>
+            {previa.modelos.map((m) => <option key={m.id} value={m.id}>{m.nombre} · IVA {m.iva ?? '—'} · {m.cuenta ?? 'sin cuenta'}</option>)}
+          </select>
+        </label>
+      )}
       {previa && (
         <div className="tabla-scroll">
           <table className="tabla-ajuste">
@@ -3739,7 +3747,7 @@ function AltaVentasXubio({ onListo }) {
                   <td>Producto <span className="mono">{p.codigo}</span></td>
                   <td>{p.nombre}</td>
                   <td>{p.estado}</td>
-                  <td className="ayuda">{p.estado === 'a crear' ? `de ${previa.modeloProducto} · IVA ${p.iva ?? '—'} % · cuenta ${p.cuenta ?? '—'}` : '—'}</td>
+                  <td className="ayuda">{p.estado === 'a crear' ? `de ${previa.modeloProducto} · IVA ${p.iva ?? '—'} · cuenta ${p.cuenta ?? '—'}` : '—'}</td>
                 </tr>
               ))}
             </tbody>
@@ -3747,7 +3755,7 @@ function AltaVentasXubio({ onListo }) {
         </div>
       )}
       <div className="acciones">
-        <button type="button" className="secundario" disabled={!!ocupado} onClick={ver}>{ocupado === 'ver' ? 'Consultando Xubio…' : 'Ver qué se va a crear'}</button>
+        <button type="button" className="secundario" disabled={!!ocupado} onClick={() => ver()}>{ocupado === 'ver' ? 'Consultando Xubio…' : 'Ver qué se va a crear'}</button>
         {previa && (aCrear
           ? <button type="button" disabled={!!ocupado} onClick={crear}>{ocupado === 'crear' ? 'Creando…' : 'Crear en Xubio'}</button>
           : <button type="button" disabled={!!ocupado} onClick={crear}>Usar los que ya existen</button>)}
