@@ -104,7 +104,7 @@ lee la URL y la clave pública de los secretos `lm_project_url` y `lm_anon_key` 
 
 ## Deploy
 
-Vercel `terracompras-projects/loading-masters`, producción en https://loading-masters.vercel.app.
+Vercel `terracompras-projects/loading-masters`, producción en https://integra.loadingmasters.terra-mare.com.ar (también responde en https://loading-masters.vercel.app).
 Conectado al repo: cada push a `main` despliega a producción y cada rama genera un preview.
 (El repo es público porque el plan Hobby de Vercel no conecta repos privados de organizaciones.)
 
@@ -148,7 +148,7 @@ los Excel está en `test/local/` (ignorada por git): `npm run test:excel`.
 | 1 | Proforma en PDF con el detalle de días trabajados por ítem (carga por JSON) | ✅ hecho |
 | 2 | App web: carga de la certificación día por día (grilla tipo Excel) y emisión desde ahí | ✅ hecho |
 | 2b | Guardar certificaciones y proformas emitidas en Supabase, con login | ✅ hecho |
-| 2c | Deploy en Vercel: https://loading-masters.vercel.app | ✅ hecho |
+| 2c | Deploy en Vercel: https://integra.loadingmasters.terra-mare.com.ar | ✅ hecho |
 | 3 | Integración Xubio: crear el **Presupuesto** de venta y seguir su estado | pendiente |
 | 4 | Seguimiento del circuito: plazo de revisión, aprobación, factura, vencimiento de cobro | pendiente |
 | 5 | Ajuste de precios: índices por mes, disparadores, pedido en ventana 1–10, aprobación y precios vigentes por fecha | ✅ hecho (IPC y dólar automáticos, MO a mano) |
