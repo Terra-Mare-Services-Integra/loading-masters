@@ -1,0 +1,5 @@
+{
+  "functions": {
+    "api/proforma-pdf.js": { "memory": 2048, "maxDuration": 60, "includeFiles": "assets/isologo-horizontal-azul.png" }
+  }
+}

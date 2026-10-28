@@ -373,7 +373,8 @@ async function enviarPresupuesto(proformaId: string, email: string | null) {
   if (!fila.transaccion_id) throw new Error('Xubio no devolvió el número de transacción del presupuesto');
   const { error: e2 } = await db.from('xubio_presupuestos').upsert(fila);
   if (e2) throw e2;
-  return { ...fila, totalProforma: pf.datos.total };
+  const pdf = await pdfPresupuesto(proformaId).then((r) => r.ruta, (e) => `error: ${(e as Error).message}`);
+  return { ...fila, totalProforma: pf.datos.total, pdf };
 }
 
 async function pdfPresupuesto(proformaId: string) {
@@ -389,9 +390,13 @@ async function pdfPresupuesto(proformaId: string) {
       const pdf = await fetch(r.urlPdf);
       if (!pdf.ok) throw new Error(`descarga ${pdf.status}`);
       const bytes = new Uint8Array(await pdf.arrayBuffer());
+      const nombre = `Presupuesto Xubio ${v.numero || v.transaccion_id}.pdf`;
+      const ruta = `proformas/${proformaId}/${nombre}`;
+      const { error: eGuardar } = await db.storage.from('documentos').upload(ruta, bytes, { contentType: 'application/pdf', upsert: true });
+      if (eGuardar) throw new Error(`no se pudo guardar: ${eGuardar.message}`);
       let bin = '';
       for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-      return { nombre: `Presupuesto Xubio ${v.numero || v.transaccion_id}.pdf`, base64: btoa(bin), tipoimpresion: tipo };
+      return { nombre, ruta, base64: btoa(bin), tipoimpresion: tipo };
     } catch (e) {
       errores.push(`tipo ${tipo}: ${(e as Error).message}`);
     }

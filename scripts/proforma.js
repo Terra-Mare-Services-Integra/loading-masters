@@ -8,6 +8,7 @@ import path from 'node:path';
 import puppeteer from 'puppeteer-core';
 import { armarProforma } from '../src/proforma/armar.js';
 import { renderProforma } from '../src/proforma/plantilla.js';
+import { opcionesPdf } from '../src/proforma/pdf.js';
 
 const NAVEGADORES = [
   process.env.CHROME_PATH,
@@ -40,17 +41,7 @@ try {
   const page = await browser.newPage();
   await page.setContent(html, { waitUntil: 'networkidle0' });
   await page.evaluate(() => document.fonts.ready);
-  await page.pdf({
-    path: `${base}.pdf`,
-    format: 'A4',
-    preferCSSPageSize: true,
-    printBackground: true,
-    displayHeaderFooter: true,
-    headerTemplate: '<span></span>',
-    footerTemplate: `<div style="width:100%;margin:0 20mm;display:flex;justify-content:space-between;font-family:Montserrat,Arial,sans-serif;font-size:7pt;letter-spacing:.06em;color:#5B6672;">
-      <span>TERRAMARE · Proforma ${proforma.numero}</span>
-      <span style="font-family:'IBM Plex Mono',monospace;"><span class="pageNumber"></span> / <span class="totalPages"></span></span></div>`,
-  });
+  await page.pdf({ path: `${base}.pdf`, ...opcionesPdf(proforma.numero) });
 } finally {
   await browser.close();
 }

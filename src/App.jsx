@@ -7,6 +7,7 @@ import { rangoDias, parse, sumarDias, esHabil } from './lib/fechas.js';
 import { supabase, DOMINIOS } from './lib/supabase.js';
 import { armarProforma, comprimirTramos, expandirTramos } from './proforma/armar.js';
 import { renderProforma } from './proforma/plantilla.js';
+import { carpetaProforma, archivoProforma } from './proforma/pdf.js';
 import * as db from './datos.js';
 import { RUBROS, resumenGastos, gastosPorMes, montoArs, etiquetaGasto } from './lib/operacion.js';
 import { semestresContrato, cumplimiento, fraccionSemestre, bonoSemestre } from './lib/desempeno.js';
@@ -462,6 +463,7 @@ function Facturacion({ id, onCambioResumen }) {
     setEstado({ tipo: 'guardado', ...actualizado });
     const emitida = await db.registrarProforma(carga.id, proforma);
     setProformas((ps) => [emitida, ...ps]);
+    db.guardarPdfProforma(emitida.id).catch(() => {});
     imprimir(emitida.datos);
   }
 
@@ -893,7 +895,7 @@ function Historial({ proformas, onCambio }) {
                     }}>Anular</button>
                   </>
                 ) : null}
-                <button type="button" className="secundario chico" onClick={() => imprimir(p.datos)}>Reimprimir</button>
+                <BotonPdfProforma proforma={p} />
                 <XubioProforma proforma={p} vinculo={vinculos[p.id]} cfg={cfgVentas} onCambio={async () => setVersionXubio((v) => v + 1)} />
               </td>
             </tr>
@@ -3770,25 +3772,66 @@ function AltaVentasXubio({ onListo }) {
   );
 }
 
-// Descarga un PDF que vino en base64.
-function descargarBase64(nombre, base64) {
-  const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
-  const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
+// Descarga un archivo (Blob) con su nombre.
+function descargar(nombre, blob) {
+  const url = URL.createObjectURL(blob);
   const a = Object.assign(document.createElement('a'), { href: url, download: nombre });
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
+// Descarga un PDF que vino en base64.
+function descargarBase64(nombre, base64) {
+  descargar(nombre, new Blob([Uint8Array.from(atob(base64), (c) => c.charCodeAt(0))], { type: 'application/pdf' }));
+}
+
+// PDF de la proforma guardado en Supabase; si todavía no está, se genera y se guarda.
+async function pdfProforma(p) {
+  const ruta = `${carpetaProforma(p.id)}/${archivoProforma(p.numero)}`;
+  try {
+    return await db.bajarDocumento(ruta);
+  } catch {
+    await db.guardarPdfProforma(p.id);
+    return db.bajarDocumento(ruta);
+  }
+}
+
+function BotonPdfProforma({ proforma: p }) {
+  const [ocupado, setOcupado] = useState(false);
+  const [error, setError] = useState('');
+  async function bajar() {
+    setOcupado(true);
+    setError('');
+    try {
+      descargar(archivoProforma(p.numero), await pdfProforma(p));
+    } catch (e) {
+      // Sin PDF guardado, queda la impresión del navegador.
+      setError(`No se pudo generar el PDF (${e.message}); se abre la impresión.`);
+      imprimir(p.datos);
+    } finally {
+      setOcupado(false);
+    }
+  }
+  return (
+    <>
+      <button type="button" className="secundario chico" disabled={ocupado} onClick={bajar}>{ocupado ? 'Generando…' : 'PDF proforma'}</button>
+      {error && <span className="ayuda error">{error}</span>}
+    </>
+  );
 }
 
 // Acciones de Xubio de una proforma: enviar el presupuesto, bajar su PDF y preparar el mail.
 function XubioProforma({ proforma: p, vinculo, cfg, onCambio }) {
   const [ocupado, setOcupado] = useState('');
   const [error, setError] = useState('');
+  const [nota, setNota] = useState('');
   if (!cfg || !['emitida', 'enviada'].includes(p.estado)) return null;
   const faltan = faltanVentas(cfg);
 
   async function hacer(nombre, fn) {
     setOcupado(nombre);
     setError('');
+    setNota('');
     try {
       await fn();
     } catch (e) {
@@ -3819,7 +3862,8 @@ function XubioProforma({ proforma: p, vinculo, cfg, onCambio }) {
   const prepararMail = () => hacer('mail', async () => {
     const r = await db.pdfPresupuestoXubio(p.id);
     descargarBase64(r.nombre, r.base64);
-    imprimir(p.datos);
+    descargar(archivoProforma(p.numero), await pdfProforma(p));
+    setNota('Los dos PDF quedaron en Descargas (y guardados en la app): arrastralos al mail.');
     const per = p.datos.certificacion.periodo;
     const asunto = `Proforma ${p.numero} · Servicio CO&C · ${fecha(per.desde)} al ${fecha(per.hasta)} · Terra Mare`;
     const cuerpo = [
@@ -3849,6 +3893,7 @@ function XubioProforma({ proforma: p, vinculo, cfg, onCambio }) {
       ) : (
         <button type="button" className="secundario chico" disabled={!!ocupado} onClick={enviar}>{ocupado === 'enviar' ? 'Enviando…' : 'Enviar a Xubio'}</button>
       )}
+      {nota && <span className="ayuda">{nota}</span>}
       {error && <span className="ayuda error">{error}</span>}
     </div>
   );

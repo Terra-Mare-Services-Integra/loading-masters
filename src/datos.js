@@ -466,3 +466,20 @@ export async function leerPresupuestosXubio(proformaIds) {
   const filas = ok(await supabase.from('xubio_presupuestos').select('*').in('proforma_id', proformaIds));
   return Object.fromEntries(filas.map((f) => [f.proforma_id, f]));
 }
+
+// ─── Documentos (PDF guardados en Supabase Storage, carpeta "documentos") ─────
+
+// Genera en el servidor el PDF de la proforma y lo guarda; devuelve la ruta.
+export async function guardarPdfProforma(proformaId) {
+  const { data: { session } } = await supabase.auth.getSession();
+  const r = await fetch('/api/proforma-pdf', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token ?? ''}` },
+    body: JSON.stringify({ proformaId }),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error ?? `El servidor respondió ${r.status}`);
+  return d.ruta;
+}
+
+export const bajarDocumento = async (ruta) => ok(await supabase.storage.from('documentos').download(ruta));
