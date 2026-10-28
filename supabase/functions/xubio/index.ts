@@ -240,6 +240,11 @@ async function sincronizarCompras(desdeParam?: string, hastaParam?: string) {
 // ─── Ventas: presupuesto de la proforma ──────────────────────────────────────
 
 const selector = (x: { id: number; nombre: string } | null) => (x ? { ID: x.id, id: x.id, nombre: x.nombre } : null);
+// Ítem del servicio mensual y el producto aparte para los días con servicio reducido (75 %).
+const ITEM_SERVICIO = '1';
+const ITEM_SERVICIO_REDUCIDO = '1-75';
+const diasMes = (iso: string) => new Date(Date.UTC(Number(iso.slice(0, 4)), Number(iso.slice(5, 7)), 0)).getUTCDate();
+const redondear = (n: number) => Math.round(n * 100) / 100;
 const ESTADOS_PRESUPUESTO: Record<string, number> = { pendiente: -3, aprobado: -2, rechazado: -7, facturado: -5 };
 
 async function opcionesVentas() {
@@ -268,23 +273,38 @@ function cuerpoPresupuesto(pf: any, cfg: any) {
   const d = pf.datos;
   const cert = d.certificacion;
   const iva = Number(d.iva ?? 0.21);
-  const renglones = cert.items.filter((i: any) => Number(i.importe) > 0).map((i: any) => {
-    const producto = cfg.productos?.[i.codigo];
-    if (!producto?.id) throw new Error(`Falta elegir el producto de venta para el ítem ${i.codigo}`);
-    const conIva = Math.round(Number(i.importe) * (1 + iva) * 100) / 100;
-    const detalle = i.tipo === 'reembolsable'
-      ? `gastos reembolsables ${Number(i.gasto).toFixed(2)} + fee`
-      : `${Number(i.mesesEquivalentes).toFixed(4)} meses equivalentes × ${Number(i.precioMensual).toFixed(2)}`;
+  const renglon = (codigoProducto: string, importe: number, descripcion: string) => {
+    const producto = cfg.productos?.[codigoProducto];
+    if (!producto?.id) throw new Error(`Falta elegir el producto de venta para el ítem ${codigoProducto}`);
+    const conIva = Math.round(importe * (1 + iva) * 100) / 100;
     return {
       producto: selector(producto),
       centroDeCosto: selector(cfg.centroDeCosto),
-      descripcion: `${i.codigo} · ${i.descripcion} · ${detalle}`,
+      descripcion,
       cantidad: 1,
       precio: conIva,
       precioconivaincluido: conIva,
-      importe: Number(i.importe),
+      importe,
       total: conIva,
     };
+  };
+  const renglones = cert.items.filter((i: any) => Number(i.importe) > 0).flatMap((i: any) => {
+    if (i.tipo === 'reembolsable') {
+      return [renglon(i.codigo, Number(i.importe), `${i.codigo} · ${i.descripcion} · gastos reembolsables ${Number(i.gasto).toFixed(2)} + fee`)];
+    }
+    // El servicio (ítem 1) se parte en días completos y días con servicio reducido (factor < 1), cada uno
+    // con su producto, para seguir en Xubio cuánto se facturó en cada régimen. El total no cambia.
+    const reducidos = i.codigo === ITEM_SERVICIO ? lista(i.porDia).filter((d: any) => d.factor > 0 && d.factor < 1) : [];
+    const meses = (dias: any[]) => dias.reduce((s, d) => s + d.factor / (cert.divisor ?? diasMes(d.fecha)), 0);
+    const texto = (m: number) => `${m.toFixed(4)} meses equivalentes × ${Number(i.precioMensual).toFixed(2)}`;
+    if (!reducidos.length) return [renglon(i.codigo, Number(i.importe), `${i.codigo} · ${i.descripcion} · ${texto(Number(i.mesesEquivalentes))}`)];
+    const importeReducido = redondear(reducidos.reduce((s: number, d: any) => s + d.precio * d.factor / (cert.divisor ?? diasMes(d.fecha)), 0));
+    const importeCompleto = redondear(Number(i.importe) - importeReducido);
+    const mesesReducido = meses(reducidos);
+    return [
+      ...(importeCompleto > 0 ? [renglon(i.codigo, importeCompleto, `${i.codigo} · ${i.descripcion} · días completos · ${texto(Number(i.mesesEquivalentes) - mesesReducido)}`)] : []),
+      renglon(ITEM_SERVICIO_REDUCIDO, importeReducido, `${i.codigo} · ${i.descripcion} · ${reducidos.length} días con servicio reducido · ${texto(mesesReducido)}`),
+    ];
   });
   if (!renglones.length) throw new Error('La proforma no tiene ítems con importe');
   const dma = (iso: string) => iso.split('-').reverse().join('/');

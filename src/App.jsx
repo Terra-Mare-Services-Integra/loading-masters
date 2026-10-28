@@ -3588,7 +3588,12 @@ function Dashboards() {
 // ─── Xubio: ventas (presupuesto de la proforma) ──────────────────────────────
 
 // Ítems del contrato que se facturan (cada uno necesita su producto de venta en Xubio).
-const ITEMS_VENTA = CONTRATO_VMOS.items.map((i) => ({ codigo: i.codigo, nombre: `${i.codigo} · ${i.descripcion}` }));
+// El ítem 1 tiene además un producto para los días con servicio reducido (75 %): el presupuesto lo
+// separa en su propio renglón para seguir en Xubio cuánto se facturó en cada régimen.
+const ITEMS_XUBIO = CONTRATO_VMOS.items.flatMap(({ codigo, descripcion }) => (codigo === '1'
+  ? [{ codigo, descripcion }, { codigo: '1-75', descripcion: 'Servicio mensual CO&C al 75 % (servicio reducido)' }]
+  : [{ codigo, descripcion }]));
+const ITEMS_VENTA = ITEMS_XUBIO.map((i) => ({ codigo: i.codigo, nombre: `${i.codigo} · ${i.descripcion}` }));
 
 // Qué falta para poder crear el presupuesto en Xubio (el producto se exige por ítem al enviar).
 const faltanVentas = (cfg) => [
@@ -3694,7 +3699,7 @@ function AltaVentasXubio({ onListo }) {
   const [previa, setPrevia] = useState(null);
   const [ocupado, setOcupado] = useState('');
   const [aviso, setAviso] = useState('');
-  const items = CONTRATO_VMOS.items.map(({ codigo, descripcion }) => ({ codigo, descripcion }));
+  const items = ITEMS_XUBIO;
 
   async function hacer(nombre, fn) {
     setOcupado(nombre);
