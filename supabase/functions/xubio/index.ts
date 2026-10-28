@@ -421,13 +421,15 @@ async function altaVentas(items: { codigo: string; descripcion: string }[], conf
 
   // Productos: uno por ítem del contrato, con código VMOS-<ítem>; si el código ya existe, se usa ese.
   const lp = lista(productos);
-  const modeloProducto = await plantilla(tk, '/ProductoVentaBean', lp.map((p: any) => p.productoid ?? p.id),
-    (p) => Number(p.tasaIva?.porcentaje) === 21 && p.activo !== 0 && p.activo !== false);
+  // Xubio no tiene GET de un producto de venta suelto: el modelo sale del listado, que trae todos los campos.
+  const iva21 = (p: any) => Number(p.tasaIva?.porcentaje) === 21 || /21/.test(`${p.tasaIva?.nombre ?? ''} ${p.tasaIva?.codigo ?? ''}`);
+  const modeloProducto = [...lp].reverse().find((p: any) => iva21(p) && p.activo !== 0 && p.activo !== false) ?? null;
+  const ivas = [...new Set(lp.map((p: any) => JSON.stringify(p.tasaIva ?? null)))].slice(0, 5).join(' | ');
   const prods: any[] = items.map((it) => {
     const codigo = codigoProducto(it.codigo);
     const ya = lp.find((p: any) => String(p.codigo ?? '').toUpperCase() === codigo);
     if (ya) return { item: it.codigo, estado: 'existe', id: ya.productoid ?? ya.id, nombre: ya.nombre, codigo };
-    if (!modeloProducto) throw new Error('No encontré en Xubio un producto de venta con IVA 21 % para copiar los datos contables');
+    if (!modeloProducto) throw new Error(`No encontré en Xubio un producto de venta con IVA 21 % para copiar los datos contables (hay ${lp.length} productos; IVA vistos: ${ivas || 'ninguno'})`);
     return {
       item: it.codigo,
       estado: 'a crear',
