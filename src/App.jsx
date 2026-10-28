@@ -4,7 +4,7 @@ import { CONTRATO_VMOS } from './lib/contrato.js';
 import { periodoDeCierre, diasDelMes } from './lib/certificacion.js';
 import { ventanasDelPeriodo, estadoVentana, evaluarVentana, factorAjuste } from './lib/ajuste.js';
 import { rangoDias, parse, sumarDias, esHabil } from './lib/fechas.js';
-import { supabase, DOMINIOS } from './lib/supabase.js';
+import { supabase } from './lib/supabase.js';
 import { armarProforma, comprimirTramos, expandirTramos } from './proforma/armar.js';
 import { renderProforma } from './proforma/plantilla.js';
 import { carpetaProforma, archivoProforma } from './proforma/pdf.js';
@@ -97,11 +97,6 @@ function Ingreso() {
   async function enviar(e) {
     e.preventDefault();
     setAviso(null);
-    const dominio = email.split('@')[1]?.toLowerCase();
-    if (!DOMINIOS.includes(dominio)) {
-      setAviso({ error: true, texto: `Solo pueden ingresar cuentas @${DOMINIOS.join(', @')}.` });
-      return;
-    }
     setEnviando(true);
     const r = modo === 'entrar'
       ? await supabase.auth.signInWithPassword({ email, password: clave })
@@ -137,7 +132,27 @@ function Ingreso() {
 
 function Certificacion() {
   const [vista, setVista] = useState('inicio');
-  if (vista === 'inicio') return <Inicio onAbrir={setVista} />;
+  const [rol, setRol] = useState(undefined);
+
+  // 'editor' ve y carga todo; 'lector' (acceso de solo lectura) ve el análisis; sin rol, no entra.
+  useEffect(() => {
+    supabase.rpc('rol_usuario').then(({ data }) => setRol(data ?? null), () => setRol(null));
+  }, []);
+
+  if (rol === undefined) return null;
+  if (rol === null) {
+    return (
+      <main className="ingreso">
+        <h1>Sin acceso.</h1>
+        <div className="filete" />
+        <p className="aviso">Tu cuenta todavía no tiene permiso para ver Loading Masters. Pedile acceso a Terra Mare y volvé a ingresar.</p>
+      </main>
+    );
+  }
+  const soloLectura = rol === 'lector';
+  if (vista === 'inicio' || (soloLectura && !ANALISIS.some((m) => m.id === vista))) {
+    return <Inicio onAbrir={setVista} soloLectura={soloLectura} />;
+  }
   const titulo = [...ANALISIS, ...MODULOS].find((m) => m.id === vista)?.nombre;
   return (
     <>
@@ -1363,7 +1378,7 @@ const MODULOS = [
 ];
 const ACTIVOS = ['dashboards', 'facturaciones', 'formula', 'resultado', 'sueldos', 'desempeno', 'operacion', 'vehiculo', 'administracion', 'seguros', 'upselling', 'xubio'];
 
-function Inicio({ onAbrir }) {
+function Inicio({ onAbrir, soloLectura }) {
   return (
     <main>
       <section className="encabezado">
@@ -1376,10 +1391,16 @@ function Inicio({ onAbrir }) {
       <div className="cajitas analisis">
         {ANALISIS.map((m) => <Cajita key={m.id} modulo={m} onAbrir={onAbrir} />)}
       </div>
-      <div className="overline grupo-cajitas">Gestión</div>
-      <div className="cajitas">
-        {MODULOS.map((m) => <Cajita key={m.id} modulo={m} onAbrir={onAbrir} />)}
-      </div>
+      {soloLectura ? (
+        <p className="ayuda">Acceso de solo lectura: resultado y dashboards del contrato.</p>
+      ) : (
+        <>
+          <div className="overline grupo-cajitas">Gestión</div>
+          <div className="cajitas">
+            {MODULOS.map((m) => <Cajita key={m.id} modulo={m} onAbrir={onAbrir} />)}
+          </div>
+        </>
+      )}
     </main>
   );
 }
