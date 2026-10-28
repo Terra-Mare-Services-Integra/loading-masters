@@ -305,8 +305,8 @@ function cuerpoPresupuesto(pf: any, cfg: any) {
       centroDeCosto: selector(cfg.centroDeCosto),
       descripcion,
       cantidad: 1,
-      precio: conIva,
-      precioconivaincluido: conIva,
+      // Xubio toma "precio" como neto y le suma el IVA del producto.
+      precio: importe,
       importe,
       total: conIva,
     };
@@ -357,7 +357,10 @@ async function enviarPresupuesto(proformaId: string, email: string | null) {
   const res = previo
     ? await xubio(tk, `/presupuestoBean/${previo.transaccion_id}`, 'PUT', { ...cuerpo, transaccionid: previo.transaccion_id })
     : await xubio(tk, '/presupuestoBean', 'POST', cuerpo);
-  const p = lista(res)[0] ?? {};
+  let p = lista(res)[0] ?? {};
+  // El total se lee del presupuesto guardado en Xubio, para compararlo con la proforma.
+  const tid = p.transaccionid ?? previo?.transaccion_id;
+  if (tid && p.importetotal == null) p = { ...p, ...(lista(await xubio(tk, `/presupuestoBean/${tid}`).catch(() => null))[0] ?? {}) };
   const fila = {
     proforma_id: proformaId,
     transaccion_id: p.transaccionid ?? previo?.transaccion_id,
