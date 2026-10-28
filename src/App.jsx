@@ -3682,7 +3682,78 @@ function ConfigVentasXubio() {
         <button type="button" onClick={guardar}>Guardar</button>
         {aviso && <span className={`ayuda ${aviso.startsWith('Error') ? 'error' : ''}`}>{aviso}</span>}
       </div>
+      {cfg.alta && (!cfg.cliente?.id || ITEMS_VENTA.some((it) => !cfg.productos?.[it.codigo]?.id)) && (
+        <AltaVentasXubio onListo={() => db.leerReferencia('xubio_ventas').then(setCfg)} />
+      )}
     </section>
+  );
+}
+
+// Alta en Xubio del cliente y los productos de venta: primero la vista previa, después crear.
+function AltaVentasXubio({ onListo }) {
+  const [previa, setPrevia] = useState(null);
+  const [ocupado, setOcupado] = useState('');
+  const [aviso, setAviso] = useState('');
+  const items = CONTRATO_VMOS.items.map(({ codigo, descripcion }) => ({ codigo, descripcion }));
+
+  async function hacer(nombre, fn) {
+    setOcupado(nombre);
+    setAviso('');
+    try {
+      await fn();
+    } catch (e) {
+      setAviso(`Error: ${e.message}`);
+    } finally {
+      setOcupado('');
+    }
+  }
+
+  const ver = () => hacer('ver', async () => setPrevia(await db.altaVentasXubio(items)));
+  const crear = () => hacer('crear', async () => {
+    const n = (previa.cliente.estado === 'a crear' ? 1 : 0) + previa.productos.filter((p) => p.estado === 'a crear').length;
+    if (n && !confirm(`Se van a crear ${n} registros en Xubio (cliente y productos de venta). ¿Seguir?`)) return;
+    const r = await db.altaVentasXubio(items, true);
+    setPrevia(null);
+    setAviso(`Listo: ${r.cliente.nombre} y ${r.productos.length} productos quedaron elegidos.`);
+    await onListo();
+  });
+
+  const aCrear = previa && (previa.cliente.estado === 'a crear' || previa.productos.some((p) => p.estado === 'a crear'));
+  return (
+    <div className="alta-xubio">
+      <div className="overline">Alta de VMOS en Xubio</div>
+      <p className="ayuda">Crea el cliente y un producto de venta por ítem del contrato, copiando la categoría fiscal, las cuentas y el IVA de un cliente y un producto que ya existen en Xubio. Primero se ve qué se va a crear.</p>
+      {previa && (
+        <div className="tabla-scroll">
+          <table className="tabla-ajuste">
+            <thead><tr><th>Qué</th><th>Nombre</th><th>Estado</th><th>Datos copiados</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>Cliente</td>
+                <td>{previa.cliente.nombre} <span className="ayuda mono">{previa.cliente.cuit}</span></td>
+                <td>{previa.cliente.estado}</td>
+                <td className="ayuda">{previa.cliente.modelo ? `de ${previa.cliente.modelo} · ${previa.cliente.categoriaFiscal ?? '—'} · cuenta ${previa.cliente.cuentaVenta ?? '—'}` : '—'}</td>
+              </tr>
+              {previa.productos.map((p) => (
+                <tr key={p.item}>
+                  <td>Producto <span className="mono">{p.codigo}</span></td>
+                  <td>{p.nombre}</td>
+                  <td>{p.estado}</td>
+                  <td className="ayuda">{p.estado === 'a crear' ? `de ${previa.modeloProducto} · IVA ${p.iva ?? '—'} % · cuenta ${p.cuenta ?? '—'}` : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <div className="acciones">
+        <button type="button" className="secundario" disabled={!!ocupado} onClick={ver}>{ocupado === 'ver' ? 'Consultando Xubio…' : 'Ver qué se va a crear'}</button>
+        {previa && (aCrear
+          ? <button type="button" disabled={!!ocupado} onClick={crear}>{ocupado === 'crear' ? 'Creando…' : 'Crear en Xubio'}</button>
+          : <button type="button" disabled={!!ocupado} onClick={crear}>Usar los que ya existen</button>)}
+        {aviso && <span className={`ayuda ${aviso.startsWith('Error') ? 'error' : ''}`}>{aviso}</span>}
+      </div>
+    </div>
   );
 }
 

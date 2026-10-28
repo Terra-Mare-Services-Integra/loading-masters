@@ -361,6 +361,7 @@ td.con-origen input{ cursor:text; }
 .viz-rubro-barra{ display:flex; gap:2px; height:14px; }
 .viz-rubro-barra > div{ border-radius:0 3px 3px 0; }
 .viz-rubro-valor{ text-align:right; }
+.alta-xubio{ margin-top:16px; padding-top:12px; border-top:1px solid var(--border-subtle); }
 .xubio-proforma{ display:flex; flex-wrap:wrap; gap:6px; align-items:center; justify-content:flex-end; margin-top:6px; }
 .ancho-mail{ width:100%; min-width:260px; }
 

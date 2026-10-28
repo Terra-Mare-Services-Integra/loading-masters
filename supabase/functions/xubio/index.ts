@@ -8,6 +8,7 @@
 // - "enviar-presupuesto": crea (o actualiza) en Xubio el presupuesto de una proforma emitida.
 // - "pdf-presupuesto": devuelve el PDF del presupuesto (base64).
 // - "estado-presupuesto": pasa el presupuesto a aprobado, rechazado o facturado.
+// - "alta-ventas": vista previa (o, con confirmar, alta) del cliente y los productos de venta del contrato.
 import { createClient } from 'npm:@supabase/supabase-js@2';
 
 const BASE = 'https://xubio.com/API/1.1';
@@ -363,6 +364,111 @@ async function estadoPresupuesto(proformaId: string, estado: string) {
   return { estado };
 }
 
+// ─── Alta del cliente y los productos de venta ──────────────────────────────────────────────────
+// La razón social y el CUIT viven en referencias.xubio_ventas.alta (no en el repo). Los campos
+// contables (categoría fiscal, cuentas, IVA, unidad) se copian de un cliente y un producto que ya
+// existen en Xubio, para que queden igual que los que carga administración.
+const soloDigitos = (s: unknown) => String(s ?? '').replace(/\D/g, '');
+const codigoProducto = (item: string) => `VMOS-${item.toUpperCase()}`;
+const CAMPOS_PRODUCTO = ['unidadMedida', 'categoria', 'tasaIva', 'cuentaContable', 'catFormIVA2002', 'actividadEconomica', 'tipoOperacionIvaSimple', 'noObjetoImpuesto', 'sincronizaStock', 'stockNegativo'];
+const CAMPOS_CLIENTE = ['categoriaFiscal', 'identificacionTributaria', 'tipoDeOrganizacion', 'responsabilidadOrganizacionItem', 'cuentaVenta_id', 'cuentaCompra_id', 'pais', 'provincia', 'listaPrecioVenta', 'esclienteextranjero', 'esProveedor'];
+const elegirCampos = (x: any, campos: string[]) => Object.fromEntries(campos.filter((k) => x?.[k] != null).map((k) => [k, x[k]]));
+
+// El modelo más reciente que cumpla la condición (se trae el detalle de a uno, de atrás para adelante).
+async function plantilla(tk: string, ruta: string, ids: unknown[], ok: (x: any) => boolean) {
+  for (const id of ids.slice(-15).reverse()) {
+    const x = lista(await xubio(tk, `${ruta}/${id}`).catch(() => null))[0];
+    if (x && ok(x)) return x;
+  }
+  return null;
+}
+
+async function altaVentas(items: { codigo: string; descripcion: string }[], confirmar: boolean, email: string | null) {
+  const { data } = await db.from('referencias').select('valor').eq('clave', 'xubio_ventas').maybeSingle();
+  const cfg = data?.valor ?? {};
+  const alta = cfg.alta ?? {};
+  if (!alta.razonSocial || soloDigitos(alta.cuit).length !== 11) throw new Error('Falta la razón social o el CUIT del cliente en la configuración');
+  if (!items?.length) throw new Error('Faltan los ítems del contrato');
+  const tk = await token();
+  const [clientes, productos] = await Promise.all([xubio(tk, '/clienteBean'), xubio(tk, '/ProductoVentaBean')]);
+
+  // Cliente: si ya hay uno con ese CUIT, se usa ese.
+  const cuit = soloDigitos(alta.cuit);
+  const existente = lista(clientes).find((c: any) => soloDigitos(c.cuit ?? c.CUIT ?? c.identificacionTributaria?.numero) === cuit);
+  let cliente: any;
+  if (existente) {
+    cliente = { estado: 'existe', id: existente.cliente_id ?? existente.id, nombre: existente.razonSocial || existente.nombre };
+  } else {
+    const modelo = await plantilla(tk, '/clienteBean', lista(clientes).map((c: any) => c.cliente_id ?? c.id),
+      (c) => /inscripto/i.test(nombre(c.categoriaFiscal) ?? '') && soloDigitos(c.cuit ?? c.CUIT).length === 11);
+    if (!modelo) throw new Error('No encontré en Xubio un cliente Responsable Inscripto para copiar los datos contables');
+    const cuitGuiones = `${cuit.slice(0, 2)}-${cuit.slice(2, 10)}-${cuit.slice(10)}`;
+    cliente = {
+      estado: 'a crear',
+      modelo: modelo.razonSocial || modelo.nombre,
+      cuerpo: {
+        ...elegirCampos(modelo, CAMPOS_CLIENTE),
+        nombre: alta.razonSocial,
+        razonSocial: alta.razonSocial,
+        cuit: cuitGuiones,
+        CUIT: cuitGuiones,
+        email: alta.email ?? '',
+        direccion: alta.direccion ?? '',
+        descripcion: 'Contrato CO&C · Loading Masters',
+      },
+    };
+  }
+
+  // Productos: uno por ítem del contrato, con código VMOS-<ítem>; si el código ya existe, se usa ese.
+  const lp = lista(productos);
+  const modeloProducto = await plantilla(tk, '/ProductoVentaBean', lp.map((p: any) => p.productoid ?? p.id),
+    (p) => Number(p.tasaIva?.porcentaje) === 21 && p.activo !== 0 && p.activo !== false);
+  const prods: any[] = items.map((it) => {
+    const codigo = codigoProducto(it.codigo);
+    const ya = lp.find((p: any) => String(p.codigo ?? '').toUpperCase() === codigo);
+    if (ya) return { item: it.codigo, estado: 'existe', id: ya.productoid ?? ya.id, nombre: ya.nombre, codigo };
+    if (!modeloProducto) throw new Error('No encontré en Xubio un producto de venta con IVA 21 % para copiar los datos contables');
+    return {
+      item: it.codigo,
+      estado: 'a crear',
+      codigo,
+      cuerpo: { ...elegirCampos(modeloProducto, CAMPOS_PRODUCTO), nombre: `VMOS ${it.codigo} · ${it.descripcion}`.slice(0, 120), codigo, usrcode: codigo, activo: 1 },
+    };
+  });
+
+  const resumen = {
+    cliente: { estado: cliente.estado, nombre: cliente.nombre ?? alta.razonSocial, cuit: alta.cuit, modelo: cliente.modelo ?? null, categoriaFiscal: nombre(cliente.cuerpo?.categoriaFiscal), cuentaVenta: nombre(cliente.cuerpo?.cuentaVenta_id) },
+    productos: prods.map((p) => ({ item: p.item, estado: p.estado, codigo: p.codigo, nombre: p.nombre ?? p.cuerpo?.nombre, iva: p.cuerpo?.tasaIva?.porcentaje ?? null, cuenta: nombre(p.cuerpo?.cuentaContable) })),
+    modeloProducto: modeloProducto?.nombre ?? null,
+  };
+  if (!confirmar) {
+    await db.from('referencias').upsert({ clave: 'xubio_alta_previa', valor: { ...resumen, at: new Date().toISOString(), por: email }, descripcion: 'Última vista previa del alta de VMOS en Xubio' });
+    return { previa: true, ...resumen };
+  }
+
+  // Crear lo que falta y dejarlo elegido en la configuración de ventas.
+  if (cliente.estado === 'a crear') {
+    const r = lista(await xubio(tk, '/clienteBean', 'POST', cliente.cuerpo))[0] ?? {};
+    cliente = { estado: 'creado', id: r.cliente_id ?? r.id, nombre: r.razonSocial || r.nombre || alta.razonSocial };
+    if (!cliente.id) throw new Error('Xubio no devolvió el id del cliente');
+  }
+  const elegidos: Record<string, { id: number; nombre: string }> = { ...(cfg.productos ?? {}) };
+  for (const p of prods) {
+    if (p.estado === 'a crear') {
+      const r = lista(await xubio(tk, '/ProductoVentaBean', 'POST', p.cuerpo))[0] ?? {};
+      p.id = r.productoid ?? r.id;
+      p.nombre = r.nombre ?? p.cuerpo.nombre;
+      p.estado = 'creado';
+      if (!p.id) throw new Error(`Xubio no devolvió el id del producto ${p.codigo}`);
+    }
+    elegidos[p.item] = { id: p.id, nombre: p.nombre };
+  }
+  const nuevo = { ...cfg, cliente: { id: cliente.id, nombre: cliente.nombre, cuit: alta.cuit }, productos: elegidos };
+  const { error } = await db.from('referencias').update({ valor: nuevo, updated_by: email }).eq('clave', 'xubio_ventas');
+  if (error) throw error;
+  return { creado: true, cliente, productos: prods.map((p) => ({ item: p.item, estado: p.estado, id: p.id, nombre: p.nombre, codigo: p.codigo })) };
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });
   try {
@@ -379,7 +485,7 @@ Deno.serve(async (req) => {
     if (error || !autorizado) return responder({ error: 'No autorizado' }, 403);
 
     const { data: { user } } = await usuario.auth.getUser();
-    const { accion = 'diagnostico', desde, hasta, proformaId, estado } = cuerpo;
+    const { accion = 'diagnostico', desde, hasta, proformaId, estado, items, confirmar } = cuerpo;
     const hoy = new Date();
     const hace90 = new Date(hoy.getTime() - 90 * 864e5);
     if (accion === 'diagnostico') return responder(await diagnostico(desde ?? fechaIso(hace90), hasta ?? fechaIso(hoy)));
@@ -388,6 +494,7 @@ Deno.serve(async (req) => {
     if (accion === 'enviar-presupuesto') return responder(await enviarPresupuesto(proformaId, user?.email ?? null));
     if (accion === 'pdf-presupuesto') return responder(await pdfPresupuesto(proformaId));
     if (accion === 'estado-presupuesto') return responder(await estadoPresupuesto(proformaId, estado));
+    if (accion === 'alta-ventas') return responder(await altaVentas(items, confirmar === true, user?.email ?? null));
     return responder({ error: `Acción desconocida: ${accion}` }, 400);
   } catch (e) {
     return responder({ error: (e as Error).message }, 500);
