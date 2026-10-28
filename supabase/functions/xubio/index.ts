@@ -247,16 +247,39 @@ const diasMes = (iso: string) => new Date(Date.UTC(Number(iso.slice(0, 4)), Numb
 const redondear = (n: number) => Math.round(n * 100) / 100;
 const ESTADOS_PRESUPUESTO: Record<string, number> = { pendiente: -3, aprobado: -2, rechazado: -7, facturado: -5 };
 
+// El id de un objeto de Xubio: ID o id según el listado, o cualquier campo numérico que termine en "id".
+const idDe = (x: any) => x?.ID ?? x?.id ?? Object.entries(x ?? {}).find(([k, v]) => /id$/i.test(k) && typeof v === 'number')?.[1] ?? null;
+
+// El listado de centros de costo puede venir sin id: en ese caso se toma de los renglones de las
+// facturas de compra recientes, que sí lo traen.
+async function centrosDeCosto(tk: string) {
+  const centros = lista(await xubio(tk, '/centroDeCostoBean')).map((c: any) => ({ id: idDe(c), nombre: nombre(c) }));
+  if (centros.every((c) => c.id != null)) return centros;
+  const hoy = new Date();
+  const facturas = lista(await xubio(tk, `/comprobanteCompraBean?fechaDesde=${fechaIso(new Date(hoy.getTime() - 120 * 864e5))}&fechaHasta=${fechaIso(hoy)}`));
+  const ids = new Map<string, number>();
+  for (const f of facturas.slice(-20)) {
+    const id = f.transaccionid ?? f.transaccionId;
+    const detalle = lista(f.transaccionProductoItems).length ? f : lista(await xubio(tk, `/comprobanteCompraBean/${id}`).catch(() => null))[0];
+    for (const i of lista(detalle?.transaccionProductoItems)) {
+      const c = i.centroDeCosto;
+      if (c && nombre(c) && idDe(c) != null) ids.set(nombre(c), idDe(c));
+    }
+    if (centros.every((c) => c.id != null || ids.has(c.nombre))) break;
+  }
+  return centros.map((c) => ({ ...c, id: c.id ?? ids.get(c.nombre) ?? null }));
+}
+
 async function opcionesVentas() {
   const tk = await token();
   const [clientes, productos, puntos, centros] = await Promise.all([
-    xubio(tk, '/clienteBean'), xubio(tk, '/ProductoVentaBean'), xubio(tk, '/puntoVentaBean'), xubio(tk, '/centroDeCostoBean'),
+    xubio(tk, '/clienteBean'), xubio(tk, '/ProductoVentaBean'), xubio(tk, '/puntoVentaBean'), centrosDeCosto(tk),
   ]);
   return {
     clientes: lista(clientes).map((c: any) => ({ id: c.cliente_id ?? c.id, nombre: c.razonSocial || c.nombre, cuit: c.identificacionTributaria?.numero ?? c.cuit ?? null })),
     productos: lista(productos).filter((p: any) => p.activo !== false).map((p: any) => ({ id: p.productoid ?? p.id, nombre: p.nombre, codigo: p.codigo ?? null })),
     puntosDeVenta: lista(puntos).map((p: any) => ({ id: p.puntoVentaId ?? p.id, nombre: `${p.nombre}${p.puntoVenta ? ` (${p.puntoVenta})` : ''}` })),
-    centrosDeCosto: lista(centros).map((c: any) => ({ id: c.ID ?? c.id, nombre: c.nombre })),
+    centrosDeCosto: centros.filter((c) => c.id != null),
   };
 }
 
