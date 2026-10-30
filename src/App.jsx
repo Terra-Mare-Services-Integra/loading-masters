@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import logoUrl from '../assets/isologo-horizontal-azul.png';
 import { CONTRATO_VMOS } from './lib/contrato.js';
-import { periodoDeCierre, diasDelMes } from './lib/certificacion.js';
+import { periodoDeCierre, diasDelMes, tramosCalculo } from './lib/certificacion.js';
 import { ventanasDelPeriodo, estadoVentana, evaluarVentana, factorAjuste } from './lib/ajuste.js';
 import { rangoDias, parse, sumarDias, esHabil } from './lib/fechas.js';
 import { supabase } from './lib/supabase.js';
@@ -737,22 +737,6 @@ function Feriados({ feriados, periodo, onCambiar }) {
       </div>
     </div>
   );
-}
-
-// Tramos del cálculo de un ítem: días con el mismo mes, tarifa y factor se agrupan en una línea.
-function tramosCalculo(item, divisor) {
-  const tramos = [];
-  for (const d of item.porDia.filter((x) => x.factor > 0)) {
-    const mes = d.fecha.slice(0, 7);
-    const ultimo = tramos.at(-1);
-    if (ultimo && ultimo.mes === mes && ultimo.precio === d.precio && ultimo.factor === d.factor) {
-      ultimo.hasta = d.fecha;
-      ultimo.dias += 1;
-    } else {
-      tramos.push({ mes, desde: d.fecha, hasta: d.fecha, precio: d.precio, factor: d.factor, dias: 1, divisor: divisor ?? diasDelMes(d.fecha) });
-    }
-  }
-  return tramos.map((t) => ({ ...t, valorDia: t.precio / t.divisor, importe: (t.precio / t.divisor) * t.factor * t.dias }));
 }
 
 // Tarifa mensual de cada ítem y cómo se llega al importe: valor día × factor × días.

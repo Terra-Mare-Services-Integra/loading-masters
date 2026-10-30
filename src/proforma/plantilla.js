@@ -3,6 +3,7 @@
 // Todo el texto queda como texto real: el PDF se genera imprimiendo este HTML.
 
 import { parse } from '../lib/fechas.js';
+import { tramosCalculo } from '../lib/certificacion.js';
 
 const ars = new Intl.NumberFormat('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const num = new Intl.NumberFormat('es-AR', { maximumFractionDigits: 4 });
@@ -81,6 +82,11 @@ tr.inactivo td.cod{ color:var(--tm-blue-light); }
 .notas{ margin-top:6mm; font-size:8pt; color:var(--text-muted); }
 .notas p{ margin:0 0 1.5mm; }
 
+table.calculo{ margin-bottom:6mm; break-inside:avoid; }
+table.calculo th, table.calculo td{ padding-left:1.2mm; padding-right:1.2mm; }
+table.calculo td.n{ font-size:7.5pt; }
+table.calculo td.per{ font-family:var(--font-mono); font-size:8pt; white-space:nowrap; }
+table.calculo tr.subtotal td{ border-top:1px solid var(--tm-blue-light); font-weight:600; font-size:8pt; text-align:right; }
 table.diario td, table.diario th{ padding-top:.5mm; padding-bottom:.5mm; }
 table.diario tbody td{ line-height:1.35; }
 table.diario td{ font-size:8pt; }
@@ -125,6 +131,26 @@ function tablaDiaria(cert) {
     <tbody>${filas}</tbody>
     <tfoot><tr><td colspan="2">Días equivalentes</td>${mensuales.map((i) => `<td class="n">${num.format(i.diasEquivalentes)}</td>`).join('')}</tr>
     <tr><td colspan="2">Meses equivalentes</td>${mensuales.map((i) => `<td class="n">${dec4.format(i.mesesEquivalentes)}</td>`).join('')}</tr></tfoot>
+  </table>`;
+}
+
+// Tarifa y cálculo por tramo: tarifa mensual, valor día, factor, días e importe de cada ítem mensual.
+function tablaCalculo(cert) {
+  const filas = cert.items.filter((i) => i.tipo === 'mensual').map((i) => {
+    const tramos = tramosCalculo(i, cert.divisor);
+    if (!tramos.length) {
+      return `<tr class="inactivo"><td class="cod">${esc(i.codigo)}</td><td class="per">sin días</td><td class="n">${pesos(i.precioMensual)}</td>
+        <td class="n">—</td><td class="n">—</td><td class="n">—</td><td class="n">—</td><td class="n">${pesos(0)}</td></tr>`;
+    }
+    return tramos.map((t, k) => `<tr><td class="cod">${k === 0 ? esc(i.codigo) : ''}</td>
+      <td class="per">${fecha(t.desde).slice(0, 5)} – ${fecha(t.hasta).slice(0, 5)}</td><td class="n">${pesos(t.precio)}</td><td class="n">${t.divisor}</td>
+      <td class="n">${pesos(t.valorDia)}</td><td class="n">${num.format(t.factor)}</td><td class="n">${t.dias}</td>
+      <td class="n fuerte">${pesos(t.importe)}</td></tr>`).join('')
+      + (tramos.length > 1 ? `<tr class="subtotal"><td colspan="7">Total ítem ${esc(i.codigo)}</td><td class="n fuerte">${pesos(i.importe)}</td></tr>` : '');
+  }).join('');
+  return `<table class="calculo">
+    <thead><tr><th>Ítem</th><th>Período</th><th class="n">Tarifa mensual</th><th class="n">Días mes</th><th class="n">Valor día</th><th class="n">Factor</th><th class="n">Días</th><th class="n">Importe</th></tr></thead>
+    <tbody>${filas}</tbody>
   </table>`;
 }
 
@@ -212,6 +238,12 @@ export function renderProforma(p, { logo, pie = false } = {}) {
   ${(p.ajustesAplicados ?? []).map((a) => `<p>Precios ajustados según Anexo II (fórmula polinómica) vigentes desde ${fecha(a.rigeDesde)}: factor ${dec4.format(a.factor)} sobre la base anterior. Cada día se valoriza al precio vigente ese día; el precio mensual marcado con * es el vigente al cierre del período.</p>`).join('')}
   ${p.observaciones.map((o) => `<p>${esc(o)}</p>`).join('')}
 </div>
+<section>
+  <div class="overline">Tarifa y cálculo</div>
+  <p class="notas">Valor día = tarifa mensual / ${cert.divisor ? `${cert.divisor} días` : 'días del mes calendario'}. Importe = valor día × factor × días.</p>
+  ${tablaCalculo(cert)}
+</section>
+<div class="overline">Factor diario</div>
 ${tablaDiaria(cert)}
 
 </body></html>`;

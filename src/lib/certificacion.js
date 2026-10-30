@@ -16,6 +16,23 @@ export function periodoDeCierre(mesCierre, contrato = CONTRATO_VMOS) {
   };
 }
 
+// Tramos del cálculo de un ítem mensual: los días seguidos con el mismo mes, tarifa y factor se agrupan.
+// Valor día = tarifa mensual / días del mes (o divisor fijo); importe = valor día × factor × días.
+export function tramosCalculo(item, divisor) {
+  const tramos = [];
+  for (const d of (item.porDia ?? []).filter((x) => x.factor > 0)) {
+    const mes = d.fecha.slice(0, 7);
+    const ultimo = tramos.at(-1);
+    if (ultimo && ultimo.mes === mes && ultimo.precio === d.precio && ultimo.factor === d.factor && sumarDias(ultimo.hasta, 1) === d.fecha) {
+      ultimo.hasta = d.fecha;
+      ultimo.dias += 1;
+    } else {
+      tramos.push({ mes, desde: d.fecha, hasta: d.fecha, precio: d.precio, factor: d.factor, dias: 1, divisor: divisor ?? diasDelMes(d.fecha) });
+    }
+  }
+  return tramos.map((t) => ({ ...t, valorDia: t.precio / t.divisor, importe: (t.precio / t.divisor) * t.factor * t.dias }));
+}
+
 export function diasDelMes(fecha) {
   const d = parse(fecha);
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();

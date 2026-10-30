@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { periodoDeCierre, certificar, calendarioCobro, diasDelMes, costoDiario } from '../src/lib/certificacion.js';
+import { periodoDeCierre, certificar, calendarioCobro, diasDelMes, costoDiario, tramosCalculo } from '../src/lib/certificacion.js';
 import { rangoDias } from '../src/lib/fechas.js';
 
 const llenar = (desde, hasta, factor) => Object.fromEntries(rangoDias(desde, hasta).map((f) => [f, factor]));
@@ -62,4 +62,19 @@ test('los feriados corren el plazo, y la factura se puede fijar a mano', () => {
   const cal = calendarioCobro('2026-11-20', { factura: '2026-12-01' });
   assert.equal(cal.finRevision, '2026-11-27');
   assert.equal(cal.vencimientoPago, '2026-12-31');
+});
+
+test('los tramos del cálculo separan por mes y factor y suman el importe del ítem', () => {
+  const contrato = { items: [{ codigo: 'A', descripcion: 'x', tipo: 'mensual', precioMensual: 3100 }], plazos: { diasHabilesRevisionProforma: 5, diasPagoFactura: 30 } };
+  const factores = { A: { ...llenar('2026-10-29', '2026-10-31', 1), ...llenar('2026-11-01', '2026-11-02', 1), ...llenar('2026-11-03', '2026-11-04', 0.5) } };
+  const c = certificar({ periodo: { desde: '2026-10-29', hasta: '2026-11-04' }, factores }, contrato);
+  const tramos = tramosCalculo(c.items[0]);
+  assert.deepEqual(tramos.map((t) => [t.desde, t.hasta, t.dias, t.factor, t.divisor]), [
+    ['2026-10-29', '2026-10-31', 3, 1, 31],
+    ['2026-11-01', '2026-11-02', 2, 1, 30],
+    ['2026-11-03', '2026-11-04', 2, 0.5, 30],
+  ]);
+  assert.equal(tramos[0].valorDia, 100);
+  const suma = tramos.reduce((s, t) => s + t.importe, 0);
+  assert.ok(Math.abs(suma - c.items[0].importe) < 0.01);
 });
