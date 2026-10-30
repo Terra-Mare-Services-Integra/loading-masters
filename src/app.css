@@ -464,3 +464,7 @@ select{ max-width:100%; }
   .tabla-tarjetas .acciones-proforma, .tabla-tarjetas .xubio-proforma{ justify-content:flex-end; }
   .tabla-scroll:has(> .tabla-tarjetas){ background:none; border:0; }
 }
+.calculo-tarifa{ margin-top:16px; }
+.calculo-tarifa tr.subtotal td{ font-weight:600; border-top:1px solid var(--border-subtle); }
+.calculo-tarifa tr.inactivo td{ color:var(--text-muted); }
+.calculo-tarifa td.n, .calculo-tarifa th.n{ white-space:nowrap; }

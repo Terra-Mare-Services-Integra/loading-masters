@@ -544,6 +544,8 @@ function Facturacion({ id, onCambioResumen }) {
 
           <Grilla dias={dias} carga={carga} feriados={feriados} proforma={proforma} setFactor={setFactor} />
 
+          <CalculoTarifa proforma={proforma} />
+
           <div className="columnas">
             <section className="tarjeta">
               <div className="overline">Otros datos</div>
@@ -734,6 +736,83 @@ function Feriados({ feriados, periodo, onCambiar }) {
         ))}
       </div>
     </div>
+  );
+}
+
+// Tramos del cálculo de un ítem: días con el mismo mes, tarifa y factor se agrupan en una línea.
+function tramosCalculo(item, divisor) {
+  const tramos = [];
+  for (const d of item.porDia.filter((x) => x.factor > 0)) {
+    const mes = d.fecha.slice(0, 7);
+    const ultimo = tramos.at(-1);
+    if (ultimo && ultimo.mes === mes && ultimo.precio === d.precio && ultimo.factor === d.factor) {
+      ultimo.hasta = d.fecha;
+      ultimo.dias += 1;
+    } else {
+      tramos.push({ mes, desde: d.fecha, hasta: d.fecha, precio: d.precio, factor: d.factor, dias: 1, divisor: divisor ?? diasDelMes(d.fecha) });
+    }
+  }
+  return tramos.map((t) => ({ ...t, valorDia: t.precio / t.divisor, importe: (t.precio / t.divisor) * t.factor * t.dias }));
+}
+
+// Tarifa mensual de cada ítem y cómo se llega al importe: valor día × factor × días.
+function CalculoTarifa({ proforma: p }) {
+  const cert = p.certificacion;
+  const mensuales = cert.items.filter((i) => i.tipo === 'mensual');
+  return (
+    <section className="tarjeta calculo-tarifa">
+      <div className="overline">Tarifa y cálculo</div>
+      <p className="ayuda">
+        Valor día = tarifa mensual ÷ días del {cert.divisor ? `período (${cert.divisor} fijo)` : 'mes calendario'}.
+        Importe = valor día × factor × días. El factor es el que se carga en la grilla (1 = servicio completo, 0,75 = servicio reducido).
+      </p>
+      <div className="tabla-scroll">
+        <table className="tabla-ajuste">
+          <thead>
+            <tr>
+              <th>Ítem</th><th>Período</th><th className="n">Tarifa mensual</th><th className="n">Días del mes</th>
+              <th className="n">Valor día</th><th className="n">Factor</th><th className="n">Días</th><th className="n">Importe</th>
+            </tr>
+          </thead>
+          <tbody>
+            {mensuales.map((i) => {
+              const tramos = tramosCalculo(i, cert.divisor);
+              if (!tramos.length) {
+                return (
+                  <tr key={i.codigo} className="inactivo">
+                    <td><span className="mono">{i.codigo}</span> {i.descripcion}</td>
+                    <td className="ayuda">sin días</td>
+                    <td className="n mono">{pesos(i.precioMensual)}</td>
+                    <td className="n mono">—</td><td className="n mono">—</td><td className="n mono">—</td><td className="n mono">—</td>
+                    <td className="n mono">{pesos(0)}</td>
+                  </tr>
+                );
+              }
+              return [
+                ...tramos.map((t, k) => (
+                  <tr key={`${i.codigo}-${k}`}>
+                    <td>{k === 0 && <><span className="mono">{i.codigo}</span> {i.descripcion}</>}</td>
+                    <td className="mono">{fecha(t.desde)} – {fecha(t.hasta)}</td>
+                    <td className="n mono">{pesos(t.precio)}</td>
+                    <td className="n mono">{t.divisor}</td>
+                    <td className="n mono">{pesos(t.valorDia)}</td>
+                    <td className="n mono">{num.format(t.factor)}</td>
+                    <td className="n mono">{t.dias}</td>
+                    <td className="n mono">{pesos(t.importe)}</td>
+                  </tr>
+                )),
+                tramos.length > 1 && (
+                  <tr key={`${i.codigo}-total`} className="subtotal">
+                    <td colSpan={7} className="n">Total ítem {i.codigo}</td>
+                    <td className="n mono">{pesos(i.importe)}</td>
+                  </tr>
+                ),
+              ];
+            })}
+          </tbody>
+        </table>
+      </div>
+    </section>
   );
 }
 
