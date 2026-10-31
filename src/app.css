@@ -468,3 +468,7 @@ select{ max-width:100%; }
 .calculo-tarifa tr.subtotal td{ font-weight:600; border-top:1px solid var(--border-subtle); }
 .calculo-tarifa tr.inactivo td{ color:var(--text-muted); }
 .calculo-tarifa td.n, .calculo-tarifa th.n{ white-space:nowrap; }
+.volver-portal{ margin-left:auto; font:500 13px/1.2 var(--font-body, inherit); color:var(--tm-blue); text-decoration:none; white-space:nowrap; }
+.volver-portal:hover{ text-decoration:underline; }
+.volver-portal + .usuario{ margin-left:16px; }
+@media (max-width:599px){ .volver-portal{ font-size:12px; } }

@@ -75,6 +75,7 @@ export default function App() {
           <div className="overline">Loading Masters</div>
           <div className="barra-sub">Certificación de servicios · {CONTRATO_VMOS.cliente}</div>
         </div>
+        <a className="volver-portal" href="https://integra.home.terra-mare.com.ar" title="Volver al portal de Terra Mare">← Portal Terra Mare</a>
         {sesion && (
           <div className="usuario">
             <span className="usuario-mail" title={sesion.user.email}>{sesion.user.email}</span>
