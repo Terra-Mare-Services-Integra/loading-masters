@@ -16,7 +16,7 @@ const iso = (d: string) => { const [dd, mm, yy] = d.split('/'); return `${yy}-${
 const ddmmyyyy = (f: string) => { const [y, m, d] = f.split('-'); return `${d}/${m}/${y}`; };
 
 // Histórico BNA: tabla con "Dolar U.S.A | compra | venta | d/m/aaaa" de los días hábiles previos a la fecha.
-async function bna(tipo: 'billetes' | 'divisas', fecha: string) {
+async function bnaDia(tipo: 'billetes' | 'divisas', fecha: string) {
   const idMoneda = tipo === 'billetes' ? 22 : 55;
   const url = `https://www.bna.com.ar/Cotizador/HistoricoPrincipales?id=${tipo}&fecha=${encodeURIComponent(ddmmyyyy(fecha))}&idMoneda=${idMoneda}`;
   const r = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 (calculadora-sueldos)' } });
@@ -27,6 +27,17 @@ async function bna(tipo: 'billetes' | 'divisas', fecha: string) {
     .filter((f) => f.fecha <= fecha && f.compra > 0 && f.venta > 0)
     .sort((a, b) => a.fecha.localeCompare(b.fecha));
   return filas.at(-1) ?? null;
+}
+
+// El histórico solo trae los días hábiles cercanos a la fecha pedida: si no hay, se retrocede día a día (hasta 10).
+async function bna(tipo: 'billetes' | 'divisas', fecha: string) {
+  let f = fecha;
+  for (let i = 0; i <= 10; i++) {
+    const r = await bnaDia(tipo, f);
+    if (r) return r;
+    f = new Date(new Date(f + 'T00:00:00Z').getTime() - 864e5).toISOString().slice(0, 10);
+  }
+  return null;
 }
 
 async function bcra(fecha: string) {
@@ -59,7 +70,9 @@ Deno.serve(async (req) => {
     // Fechas pasadas ya consultadas no cambian; el día de hoy se refresca siempre.
     if (fecha < hoy && !u.searchParams.get('refrescar')) {
       const { data } = await db.from('cs_tipo_cambio').select('*').eq('fecha', fecha).maybeSingle();
-      if (data && data.divisa_venta && data.billete_venta) return responder({ ...data, cache: true });
+      // Si se había usado un día anterior (feriado o dato aún no publicado), se reintenta durante 10 días.
+      const firme = data?.fecha_bna === fecha || fecha < new Date(Date.now() - 10 * 864e5).toISOString().slice(0, 10);
+      if (data && data.divisa_venta && data.billete_venta && firme) return responder({ ...data, cache: true });
     }
 
     const avisos: string[] = [];
