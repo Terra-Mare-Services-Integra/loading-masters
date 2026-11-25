@@ -9,6 +9,7 @@ const ars = new Intl.NumberFormat('es-AR', { minimumFractionDigits: 2, maximumFr
 const num = new Intl.NumberFormat('es-AR', { maximumFractionDigits: 4 });
 const dec2 = new Intl.NumberFormat('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const dec4 = new Intl.NumberFormat('es-AR', { minimumFractionDigits: 4, maximumFractionDigits: 4 });
+const dec3 = new Intl.NumberFormat('es-AR', { minimumFractionDigits: 3, maximumFractionDigits: 3 });
 const DIAS = ['dom', 'lun', 'mar', 'mié', 'jue', 'vie', 'sáb'];
 
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
@@ -112,7 +113,7 @@ function filaItem(it) {
     <td class="desc">${esc(it.descripcion)}</td>
     <td class="n">${pesos(it.precioMensual)}${it.preciosDistintos?.length > 1 ? '*' : ''}</td>
     <td class="n">${num.format(it.diasEquivalentes)}</td>
-    <td class="n">${dec4.format(it.mesesEquivalentes)}</td>
+    <td class="n">${dec3.format(it.mesesEquivalentes)}</td>
     <td class="n fuerte">${pesos(it.importe)}</td></tr>`;
 }
 
@@ -130,7 +131,7 @@ function tablaDiaria(cert) {
     <thead><tr><th>Fecha</th><th></th>${mensuales.map((i) => `<th class="n">Ítem ${esc(i.codigo)}</th>`).join('')}</tr></thead>
     <tbody>${filas}</tbody>
     <tfoot><tr><td colspan="2">Días equivalentes</td>${mensuales.map((i) => `<td class="n">${num.format(i.diasEquivalentes)}</td>`).join('')}</tr>
-    <tr><td colspan="2">Meses equivalentes</td>${mensuales.map((i) => `<td class="n">${dec4.format(i.mesesEquivalentes)}</td>`).join('')}</tr></tfoot>
+    <tr><td colspan="2">Meses equivalentes</td>${mensuales.map((i) => `<td class="n">${dec3.format(i.mesesEquivalentes)}</td>`).join('')}</tr></tfoot>
   </table>`;
 }
 
@@ -146,7 +147,7 @@ function tablaCalculo(cert) {
       <td class="per">${fecha(t.desde).slice(0, 5)} – ${fecha(t.hasta).slice(0, 5)}</td><td class="n">${pesos(t.precio)}</td><td class="n">${t.divisor}</td>
       <td class="n">${pesos(t.valorDia)}</td><td class="n">${num.format(t.factor)}</td><td class="n">${t.dias}</td>
       <td class="n fuerte">${pesos(t.importe)}</td></tr>`).join('')
-      + (tramos.length > 1 ? `<tr class="subtotal"><td colspan="7">Total ítem ${esc(i.codigo)}</td><td class="n fuerte">${pesos(i.importe)}</td></tr>` : '');
+      + `<tr class="subtotal"><td colspan="7">Total ítem ${esc(i.codigo)}: ${dec3.format(i.mesesEquivalentes)} meses equivalentes (3 decimales) × tarifa</td><td class="n fuerte">${pesos(i.importe)}</td></tr>`;
   }).join('');
   return `<table class="calculo">
     <thead><tr><th>Ítem</th><th>Período</th><th class="n">Tarifa mensual</th><th class="n">Días mes</th><th class="n">Valor día</th><th class="n">Factor</th><th class="n">Días</th><th class="n">Importe</th></tr></thead>
@@ -233,14 +234,14 @@ export function renderProforma(p, { logo, pie = false } = {}) {
 <div class="filete"></div>
 <p class="lead">Factor diario por ítem certificado, ${fecha(cert.periodo.desde)} al ${fecha(cert.periodo.hasta)}.</p>
 <div class="notas">
-  <p>Costo diario = precio mensual / ${cert.divisor ? `${cert.divisor} días` : 'días del mes calendario'}; meses equivalentes = Σ factor diario / días del mes. Factor diario 1 = servicio completo; las fracciones reflejan la dotación efectivamente afectada.
+  <p>Costo diario = precio mensual / ${cert.divisor ? `${cert.divisor} días` : 'días del mes calendario'}; meses equivalentes = Σ factor diario / días del mes, redondeado a 3 decimales; importe = precio mensual × meses equivalentes. Factor diario 1 = servicio completo; las fracciones reflejan la dotación efectivamente afectada.
   Precios en ${esc(p.moneda)}, sin IVA, según tarifario de la Oferta.</p>
   ${(p.ajustesAplicados ?? []).map((a) => `<p>Precios ajustados según Anexo II (fórmula polinómica) vigentes desde ${fecha(a.rigeDesde)}: factor ${dec4.format(a.factor)} sobre la base anterior. Cada día se valoriza al precio vigente ese día; el precio mensual marcado con * es el vigente al cierre del período.</p>`).join('')}
   ${p.observaciones.map((o) => `<p>${esc(o)}</p>`).join('')}
 </div>
 <section>
   <div class="overline">Tarifa y cálculo</div>
-  <p class="notas">Valor día = tarifa mensual / ${cert.divisor ? `${cert.divisor} días` : 'días del mes calendario'}. Importe = valor día × factor × días.</p>
+  <p class="notas">Valor día = tarifa mensual / ${cert.divisor ? `${cert.divisor} días` : 'días del mes calendario'}. Importe del tramo = valor día × factor × días; el total del ítem usa los meses equivalentes redondeados a 3 decimales.</p>
   ${tablaCalculo(cert)}
 </section>
 <div class="overline">Factor diario</div>

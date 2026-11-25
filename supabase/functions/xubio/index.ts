@@ -319,11 +319,14 @@ function cuerpoPresupuesto(pf: any, cfg: any) {
     // con su producto, para seguir en Xubio cuánto se facturó en cada régimen. El total no cambia.
     const reducidos = i.codigo === ITEM_SERVICIO ? lista(i.porDia).filter((d: any) => d.factor > 0 && d.factor < 1) : [];
     const meses = (dias: any[]) => dias.reduce((s, d) => s + d.factor / (cert.divisor ?? diasMes(d.fecha)), 0);
-    const texto = (m: number) => `${m.toFixed(4)} meses equivalentes × ${Number(i.precioMensual).toFixed(2)}`;
+    // Meses equivalentes con 3 decimales, como los acepta el sistema de VMOS (igual que la proforma).
+    const meses3 = (m: number) => Math.round(m * 1000) / 1000;
+    const texto = (m: number) => `${meses3(m).toFixed(3)} meses equivalentes × ${Number(i.precioMensual).toFixed(2)}`;
     if (!reducidos.length) return [renglon(i.codigo, Number(i.importe), `${i.codigo} · ${i.descripcion} · ${texto(Number(i.mesesEquivalentes))}`)];
-    const importeReducido = redondear(reducidos.reduce((s: number, d: any) => s + d.precio * d.factor / (cert.divisor ?? diasMes(d.fecha)), 0));
+    const preciosReducidos = [...new Set(reducidos.map((d: any) => d.precio))] as number[];
+    const importeReducido = redondear(preciosReducidos.reduce((s: number, p: number) => s + p * meses3(meses(reducidos.filter((d: any) => d.precio === p))), 0));
     const importeCompleto = redondear(Number(i.importe) - importeReducido);
-    const mesesReducido = meses(reducidos);
+    const mesesReducido = meses3(meses(reducidos));
     return [
       ...(importeCompleto > 0 ? [renglon(i.codigo, importeCompleto, `${i.codigo} · ${i.descripcion} · días completos · ${texto(Number(i.mesesEquivalentes) - mesesReducido)}`)] : []),
       renglon(ITEM_SERVICIO_REDUCIDO, importeReducido, `${i.codigo} · ${i.descripcion} · ${reducidos.length} días con servicio reducido · ${texto(mesesReducido)}`),

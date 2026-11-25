@@ -24,8 +24,8 @@ test('facturación de noviembre: 26/10 al 30/11, ítem 1 al 0,75', () => {
   const item1 = cert.items.find((i) => i.codigo === '1');
   assert.equal(cert.dias.length, 36);
   assert.equal(item1.diasEquivalentes, 27); // 36 × 0,75
-  assert.equal(item1.mesesEquivalentes.toFixed(6), '0.895161'); // 6×0,75/31 + 30×0,75/30
-  assert.equal(item1.importe, 127_736_411.14);
+  assert.equal(item1.mesesEquivalentes, 0.895); // 6×0,75/31 + 30×0,75/30 = 0,895161 → 3 decimales (VMOS)
+  assert.equal(item1.importe, 127_713_395.57); // precio × 0,895
   assert.equal(cert.total, item1.importe);
 });
 
@@ -40,7 +40,7 @@ test('un mes calendario completo al 1 vale exactamente el precio mensual', () =>
 test('divisor fijo (como el Excel original, /31)', () => {
   const periodo = periodoDeCierre('2026-11');
   const cert = certificar({ periodo, factores: { 1: llenar('2026-10-26', '2026-11-20', 0.75) }, divisor: 31 });
-  assert.equal(cert.items[0].importe, 89_760_721.34); // 142.696.531,36 × 19,5 / 31
+  assert.equal(cert.items[0].importe, 89_756_118.23); // 142.696.531,36 × 0,629 (19,5 / 31 a 3 decimales)
 });
 
 test('reembolsables se facturan con 10% de fee', () => {
@@ -64,7 +64,7 @@ test('los feriados corren el plazo, y la factura se puede fijar a mano', () => {
   assert.equal(cal.vencimientoPago, '2026-12-31');
 });
 
-test('los tramos del cálculo separan por mes y factor y suman el importe del ítem', () => {
+test('los tramos del cálculo separan por mes y factor; el ítem usa meses a 3 decimales', () => {
   const contrato = { items: [{ codigo: 'A', descripcion: 'x', tipo: 'mensual', precioMensual: 3100 }], plazos: { diasHabilesRevisionProforma: 5, diasPagoFactura: 30 } };
   const factores = { A: { ...llenar('2026-10-29', '2026-10-31', 1), ...llenar('2026-11-01', '2026-11-02', 1), ...llenar('2026-11-03', '2026-11-04', 0.5) } };
   const c = certificar({ periodo: { desde: '2026-10-29', hasta: '2026-11-04' }, factores }, contrato);
@@ -76,5 +76,7 @@ test('los tramos del cálculo separan por mes y factor y suman el importe del í
   ]);
   assert.equal(tramos[0].valorDia, 100);
   const suma = tramos.reduce((s, t) => s + t.importe, 0);
-  assert.ok(Math.abs(suma - c.items[0].importe) < 0.01);
+  assert.ok(Math.abs(suma - 610) < 0.01); // exacto: 3100 × (3/31 + 2/30 + 1/30)
+  assert.equal(c.items[0].mesesEquivalentes, 0.197);
+  assert.equal(c.items[0].importe, 610.7); // 3100 × 0,197
 });

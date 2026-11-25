@@ -93,7 +93,7 @@ test('precios por fecha y certificación que cruza el inicio de un ajuste', () =
   const periodo = { desde: '2026-11-21', hasta: '2026-12-10' };
   const unos = Object.fromEntries(rangoDias(periodo.desde, periodo.hasta).map((f) => [f, 1]));
   const cert = certificar({ periodo, factores: { 1: unos }, precios: (f) => preciosEnFecha([aprobadoNov], f) });
-  assert.equal(cert.items[0].importe, 95_899_108.14); // 10/30 a precio base + 10/31 a precio ajustado
+  assert.equal(cert.items[0].importe, 95_914_376.31); // 0,333 meses a precio base + 0,323 (10/31) a precio ajustado
   assert.equal(cert.items[0].preciosDistintos.length, 2);
 });
 

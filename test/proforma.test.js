@@ -29,9 +29,9 @@ test('comprimir tramos es el inverso de expandir', () => {
 
 test('proforma de noviembre: neto, IVA, total y fechas', () => {
   const p = armarProforma(NOVIEMBRE);
-  assert.equal(p.subtotal, 127_736_411.14);
-  assert.equal(p.ivaImporte, 26_824_646.34);
-  assert.equal(p.total, 154_561_057.48);
+  assert.equal(p.subtotal, 127_713_395.57);
+  assert.equal(p.ivaImporte, 26_819_813.07);
+  assert.equal(p.total, 154_533_208.64);
   assert.equal(p.fechaEmision, '2026-11-20');
   assert.equal(p.calendario.factura, '2026-11-27');
   assert.equal(p.calendario.vencimientoPago, '2026-12-27');
@@ -47,6 +47,7 @@ test('el HTML trae nombre, período, importes y una fila por día', () => {
   const html = renderProforma(armarProforma(NOVIEMBRE));
   assert.match(html, /Facturar noviembre\./);
   assert.match(html, /26\/10\/2026 – 30\/11\/2026/);
-  assert.match(html, /\$ 127\.736\.411,14/);
+  assert.match(html, /\$ 127\.713\.395,57/);
+  assert.match(html, /0,895/);
   assert.equal(html.match(/<td class="f">/g).length, 36);
 });

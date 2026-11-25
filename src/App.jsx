@@ -749,7 +749,7 @@ function CalculoTarifa({ proforma: p }) {
       <div className="overline">Tarifa y cálculo</div>
       <p className="ayuda">
         Valor día = tarifa mensual ÷ días del {cert.divisor ? `período (${cert.divisor} fijo)` : 'mes calendario'}.
-        Importe = valor día × factor × días. El factor es el que se carga en la grilla (1 = servicio completo, 0,75 = servicio reducido).
+        Importe del tramo = valor día × factor × días; el total del ítem usa los meses equivalentes redondeados a 3 decimales (como los acepta VMOS). El factor es el que se carga en la grilla (1 = servicio completo, 0,75 = servicio reducido).
       </p>
       <div className="tabla-scroll">
         <table className="tabla-ajuste">
@@ -786,9 +786,9 @@ function CalculoTarifa({ proforma: p }) {
                     <td className="n mono">{pesos(t.importe)}</td>
                   </tr>
                 )),
-                tramos.length > 1 && (
+                (
                   <tr key={`${i.codigo}-total`} className="subtotal">
-                    <td colSpan={7} className="n">Total ítem {i.codigo}</td>
+                    <td colSpan={7} className="n">Total ítem {i.codigo}: {i.mesesEquivalentes.toLocaleString('es-AR', { minimumFractionDigits: 3, maximumFractionDigits: 3 })} meses equivalentes (3 decimales) × tarifa</td>
                     <td className="n mono">{pesos(i.importe)}</td>
                   </tr>
                 ),

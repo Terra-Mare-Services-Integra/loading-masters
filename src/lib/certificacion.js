@@ -2,6 +2,10 @@ import { CONTRATO_VMOS } from './contrato.js';
 import { parse, rangoDias, sumarDias, sumarDiasHabiles } from './fechas.js';
 
 const redondear = (x) => Math.round(x * 100) / 100;
+// El sistema de VMOS acepta los meses equivalentes con 3 decimales: el importe se calcula con ese
+// número redondeado, para que precio × meses equivalentes coincida exacto con lo que carga VMOS.
+export const DECIMALES_MESES = 3;
+export const redondearMeses = (x) => Math.round(x * 10 ** DECIMALES_MESES) / 10 ** DECIMALES_MESES;
 
 // Período que cierra en el mes `mesCierre` ('YYYY-MM'): del 21 del mes anterior al 20.
 // Ej.: '2026-11' → 2026-10-21 a 2026-11-20. Se usa como período sugerido.
@@ -71,10 +75,15 @@ export function certificar({ periodo, factores, reembolsables = {}, precios = {}
     const diasEquivalentes = porDia.reduce((s, d) => s + d.factor, 0);
     // Meses equivalentes: suma de factor / días del mes de cada fecha.
     const fraccion = (d) => d.factor / (divisor ?? diasDelMes(d.fecha));
-    const mesesEquivalentes = porDia.reduce((s, d) => s + fraccion(d), 0);
-    // Cada día se valoriza al precio vigente ese día (puede cambiar si rige un ajuste en el período).
-    const importe = porDia.reduce((s, d) => s + d.precio * fraccion(d), 0);
+    // Los días se agrupan por precio vigente (cambia si rige un ajuste en el período); cada tramo
+    // redondea sus meses equivalentes a 3 decimales y se valoriza a su precio.
     const preciosDistintos = [...new Set(porDia.map((d) => d.precio))];
+    const tramos = preciosDistintos.map((precio) => {
+      const meses = redondearMeses(porDia.filter((d) => d.precio === precio).reduce((s, d) => s + fraccion(d), 0));
+      return { precio, meses };
+    });
+    const mesesEquivalentes = redondearMeses(tramos.reduce((s, t) => s + t.meses, 0));
+    const importe = tramos.reduce((s, t) => s + t.precio * t.meses, 0);
     return {
       ...item,
       precioMensual: precioEn(periodo.hasta),
